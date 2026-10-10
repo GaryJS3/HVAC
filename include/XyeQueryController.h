@@ -78,6 +78,9 @@ public:
             Waiting = false;
             Used = 0;
             uart_flush_input(UART_NUM_0);
+            // An explicit restart should probe the default unit immediately,
+            // rather than resume midway through an earlier disconnected scan.
+            if (ArmRequested && !State.AddressValidated) ScanAddress = 0;
             NextQueryUs = Now + 1000000;
         }
         uint8_t Data[128];
@@ -92,7 +95,7 @@ public:
         {
             Waiting = false;
             ++State.Timeouts;
-            ScheduleRetry(Now);
+            ScheduleRetry(Now, !State.AddressValidated);
             if (State.AddressValidated && ++ConsecutiveTimeouts >= 3)
             {
                 State.AddressValidated = false;
@@ -157,9 +160,11 @@ public:
     }
 private:
     RetryBackoff Recovery;
-    void ScheduleRetry(uint64_t Now)
+    void ScheduleRetry(uint64_t Now, bool Discovering = false)
     {
-        State.RetryDelayMs = Recovery.Fail();
+        // An empty address is normal during discovery. Do not spend 30 seconds
+        // on every absent address; actual TX failures still use full backoff.
+        State.RetryDelayMs = Recovery.Fail(Discovering);
         State.FailureStreak = Recovery.Count();
         NextQueryUs = Now + uint64_t(State.RetryDelayMs) * 1000;
     }

@@ -5,9 +5,10 @@
 class RetryBackoff
 {
 public:
-    uint32_t Fail()
+    uint32_t Fail(bool Discovering = false)
     {
         if (Failures < 6) ++Failures;
+        if (Discovering) return 1000u;
         return Failures >= 6 ? 30000u : (1000u << (Failures - 1));
     }
     void Recover() { Failures = 0; }

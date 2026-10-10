@@ -253,6 +253,8 @@ int main(int Argc, char **Argv)
     for (auto Delay : Delays) assert(Retry.Fail() == Delay);
     assert(Retry.Count() == 6);
     Retry.Recover(); assert(Retry.Count() == 0 && Retry.Fail() == 1000);
+    for (unsigned I=0; I<64; ++I) assert(Retry.Fail(true) == 1000);
+    assert(Retry.Fail() == 30000); // TX faults retain capped backoff even in a scan.
     TransportFaultWindow Fault;
     assert(!Fault.Active(0));
     const uint64_t LongUptime = 0xFFFFFFFFull + 1234;

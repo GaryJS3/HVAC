@@ -179,6 +179,9 @@ XYE polling stays armed after a transmit failure or missed reply. It backs off
 1, 2, 4, 8, 16, then at most 30 seconds between recovery attempts; a validated
 reply resets the backoff. Three consecutive response misses still invalidate
 the address and restart discovery. Explicitly switching polling off stops retries.
+An absent address during discovery uses a one-second retry delay, so a full scan
+does not inherit a 30-second wait per address. Explicitly restarting polling
+without a validated address starts discovery again at address zero.
 `failure_streak` (saturated at 6) and `retry_delay_ms` expose recovery state;
 error/timeout totals remain cumulative. UART TX completion allows 150 ms for the
 33 ms query plus scheduling margin, and checks prior TX completion before sending.

@@ -174,8 +174,7 @@ private:
             State.AddressValidated = true;
             State.UpdatedUs = Now;
             ++State.Replies;
-            if (State.CommandState == 1 && Reply.Mode == ExpectedMode && Reply.SetpointRaw == ExpectedTemp &&
-                (ExpectedFan == 0x80 ? (Reply.Fan & 0x80) != 0 : Reply.Fan == ExpectedFan)) State.CommandState = 2;
+            if (State.CommandState == 1 && XYEProtocol::MatchesSet(Reply, ExpectedMode, ExpectedFan, ExpectedTemp)) State.CommandState = 2;
             ConsecutiveTimeouts = 0;
             Waiting = false;
             Used = 0;

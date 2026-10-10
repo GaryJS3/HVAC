@@ -69,6 +69,16 @@ int main(int Argc, char **Argv)
     assert(!XYEProtocol::BuildSet(0, 0x88, 0x80, 59, Set));
     assert(!XYEProtocol::BuildSet(0, 0x88, 6, 79, Set));
     assert(!XYEProtocol::BuildSet(64, 0x88, 0x80, 79, Set));
+    XYEProtocol::Status OffReadback{0, 0, 0x84, 68, 0, 0};
+    assert(XYEProtocol::MatchesSet(OffReadback, 0, 0x80, 79));
+    assert(!XYEProtocol::MatchesSet(OffReadback, 0x88, 0x80, 68));
+    XYEProtocol::Status CoolReadback{0, 0x88, 0x84, 68, 0, 0};
+    assert(XYEProtocol::MatchesSet(CoolReadback, 0x88, 0x80, 68));
+    assert(!XYEProtocol::MatchesSet(CoolReadback, 0x88, 0x80, 79));
+    assert(!XYEProtocol::MatchesSet(CoolReadback, 0x88, 1, 68));
+    CoolReadback.Fan = 1;
+    assert(XYEProtocol::MatchesSet(CoolReadback, 0x88, 1, 68));
+    assert(!XYEProtocol::MatchesSet(CoolReadback, 0x88, 0x80, 68));
     S1S2FrameParser P(Collect, nullptr);
     auto Odu = Hex("A00001200C120F000077742604B5010001001D51");
     // README's IDU example has one extra trailing 00, preserved in samples.

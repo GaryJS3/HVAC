@@ -34,6 +34,15 @@ public:
         uint8_t Address = 0, Mode = 0, Fan = 0, SetpointRaw = 0;
         uint16_t ErrorFlags = 0, ProtectionFlags = 0;
     };
+    static bool MatchesSet(const Status &Reply, uint8_t Mode, uint8_t Fan, uint8_t TempF)
+    {
+        if (Reply.Mode != Mode) return false;
+        // This unit retains its previous setpoint/fan when switched off.
+        // An Off read-back confirms shutdown, not changes to dormant settings.
+        if (Mode == 0) return true;
+        return Reply.SetpointRaw == TempF &&
+            (Fan == 0x80 ? (Reply.Fan & 0x80) != 0 : Reply.Fan == Fan);
+    }
     static uint8_t Checksum(const uint8_t *Bytes, size_t Length)
     {
         unsigned Sum = 0;

@@ -153,3 +153,10 @@ Observed approximately 39 seconds of controller/computer clock difference. The
 browser now trusts the controller's computed connected flag for sample freshness
 and measures its command-confirmation wait from local receipt, avoiding comparisons
 between clocks on different machines. History timestamps remain controller-based.
+
+### Browser sign-in across reloads, 2026-10-10
+
+Successful sign-in now saves the browser key in per-tab sessionStorage and restores
+it on reload. Added Sign out, timer cleanup and invalid-key session clearing.
+Reviewed in isolated demo: login, reload retained the dashboard, Sign out then
+reload returned to login. JavaScript syntax check passes. No equipment writes sent.

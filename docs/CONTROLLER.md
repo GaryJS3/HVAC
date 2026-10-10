@@ -96,7 +96,9 @@ a durable capture spool.
 The application uses Python's standard library and runs without pip packages.
 Its built-in HTTP server is intended for this private local deployment. Use a
 trusted LAN or TLS reverse proxy because bearer tokens over plain HTTP are not
-encrypted. No token is embedded in the HTML or persisted in browser storage.
+encrypted. No token is embedded in the HTML. Successful browser sign-in saves the access key
+in sessionStorage for that tab session, allowing page reloads. Sign out clears it;
+a rejected key also clears the saved sign-in. It is not saved in localStorage.
 
 ## Local review and tests
 

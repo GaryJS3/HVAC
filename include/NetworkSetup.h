@@ -89,7 +89,7 @@ private:
             ",\"proxy_enabled\":" + Bool(Relay.Armed.load()) + ",\"relay_errors\":" + Relay.Errors.load() +
             ",\"forwarded_bytes\":" + Relay.ForwardedBytes.load() + ",\"rejected_command_id\":" + RejectedCommand.load() +
             ",\"state\":\"" + (Relay.Armed.load() ? (Relay.FaultActive() ? "relay_fault" : Connected() ? "supervised_passthrough" : "failover_passthrough") : Connected() ? "supervised_monitor" : "standalone_monitor") +
-            "\",\"capacity_override_supported\":false,\"proxy\":" + Relay.Json(Connected()) + "},\"status\":{\"uptime_us\":" + String((unsigned long long)Now) + ",\"ports\":[";
+            "\",\"capacity_override_supported\":" + Bool(RelayService::Compiled) + ",\"proxy\":" + Relay.Json(Connected()) + "},\"status\":{\"uptime_us\":" + String((unsigned long long)Now) + ",\"ports\":[";
         for (unsigned P=0; P<2; ++P)
         {
             if (P) J += ',';
@@ -136,13 +136,14 @@ private:
         HTTPClient Http;
         Http.setConnectTimeout(1500); Http.setTimeout(1500);
         if(!Http.begin("http://"+ControllerHost+":"+String(ControllerPort)+"/api/devices/register")) return;
-        const char *Headers[]={"X-HVAC-Lease","X-HVAC-Boot","X-HVAC-Command","X-HVAC-Id","X-HVAC-Mode","X-HVAC-Fan","X-HVAC-Temp","X-HVAC-Enabled","X-HVAC-Source"};
-        Http.collectHeaders(Headers,9);
+        const char *Headers[]={"X-HVAC-Lease","X-HVAC-Boot","X-HVAC-Command","X-HVAC-Id","X-HVAC-Mode","X-HVAC-Fan","X-HVAC-Temp","X-HVAC-Enabled","X-HVAC-Source","X-HVAC-Maximum-Hz"};
+        Http.collectHeaders(Headers,10);
         Http.addHeader("Authorization","Bearer "+Token); Http.addHeader("Content-Type","application/json");
         int Code=Http.POST(Payload());
         if(Code==200 && Http.header("X-HVAC-Lease")=="1" && Http.header("X-HVAC-Boot")==String(BootId))
         {
             LastContact.store(millis());
+            Relay.RenewControllerLease(esp_timer_get_time());
             String Kind=Http.header("X-HVAC-Command"); uint32_t Id=0;
             if(Kind.length() && Number(Http.header("X-HVAC-Id"),Id) && Id && Id!=LastCommand)
             {
@@ -150,6 +151,7 @@ private:
                 if(Kind=="xye_polling" && Number(Http.header("X-HVAC-Enabled"),E) && E<=1) Ok=Xye.Arm(E==1);
                 if(Kind=="proxy" && Number(Http.header("X-HVAC-Enabled"),E) && E<=1) Ok=Relay.Arm(E==1,Id);
                 if(Kind=="proxy_probe" && Number(Http.header("X-HVAC-Source"),E) && E<=1) Ok=Relay.Probe(E,Id);
+                if(Kind=="demand_ceiling" && Number(Http.header("X-HVAC-Enabled"),E) && E<=1 && (!E || Number(Http.header("X-HVAC-Maximum-Hz"),M))) Ok=Relay.SetCeiling(E==1,E ? M : 0,Id);
                 if(Kind=="climate" && !Relay.FaultActive() && Number(Http.header("X-HVAC-Mode"),M) && Number(Http.header("X-HVAC-Fan"),F) && Number(Http.header("X-HVAC-Temp"),T) && M<=255 && F<=255 && T>=60 && T<=86)
                     Ok=Xye.Set(M,F,T,Id,esp_timer_get_time()+2000000);
                 if(!Ok) RejectedCommand.store(Id);

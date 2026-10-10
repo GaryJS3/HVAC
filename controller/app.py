@@ -155,7 +155,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             state = self.snapshot()
             if not state.get('connected') or time.time() - state.get('sampled_at', 0) > 5:
                 raise ValueError('ESP data is stale or unavailable')
-            if state['device'].get('proxy', {}).get('fault_active', bool(state['device'].get('relay_errors', 0))) and not (body.get('kind') == 'proxy' and body.get('enabled') is False):
+            if state['device'].get('proxy', {}).get('fault_active', bool(state['device'].get('relay_errors', 0))) and not (body.get('kind') in ('proxy','demand_ceiling') and body.get('enabled') is False):
                 raise ValueError('ESP relay reports a transport fault')
             kind = body.get('kind')
             if self.pending and self.pending['expires'] > time.time():
@@ -177,6 +177,20 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
                     if type(source) is not int or source not in (0,1):
                         raise ValueError('source must be 0 or 1')
                     fields = {'source':source}
+            elif kind == 'demand_ceiling':
+                proxy = state['device'].get('proxy', {})
+                if not proxy.get('ceiling', {}).get('supported'):
+                    raise ValueError('Demand-ceiling firmware required')
+                enabled = body.get('enabled')
+                if type(enabled) is not bool:
+                    raise ValueError('enabled must be boolean')
+                maximum = body.get('maximum_hz', 20)
+                if enabled and (type(maximum) is not int or not 20 <= maximum <= 120):
+                    raise ValueError('Cooling ceiling must be a whole 20..120 Hz')
+                if enabled and (not proxy.get('armed') or not state['device'].get('lease_active')):
+                    raise ValueError('Armed forwarding and active controller lease required')
+                fields = {'enabled': int(enabled)}
+                if enabled: fields['maximum_hz'] = maximum
             elif kind == 'xye_polling':
                 if not isinstance(body.get('enabled'), bool):
                     raise ValueError('enabled must be boolean')
@@ -198,7 +212,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             item = {'id':self.next_id, 'kind':kind, 'boot_id':state['device']['boot_id'], 'expires':time.time()+5, **fields}
             self.event('command_requested', item)
             self.pending = item
-            return {'accepted':True, 'command_id':item['id'] if kind in ('climate','proxy','proxy_probe') else None, 'expires_at':item['expires']}
+            return {'accepted':True, 'command_id':item['id'] if kind in ('climate','proxy','proxy_probe','demand_ceiling') else None, 'expires_at':item['expires']}
 
 def make_handler(supervisor, token, esp_token=''):
     class Handler(BaseHTTPRequestHandler):
@@ -240,6 +254,9 @@ def make_handler(supervisor, token, esp_token=''):
                                 for key, value in port.get('telemetry', {}).items():
                                     if value.get('valid') and not value.get('stale') and value.get('updated_us', 0) >= values.get(key, {}).get('updated_us', 0):
                                         values[key] = value
+                            ceiling = sample.get('device', {}).get('proxy', {}).get('ceiling', {})
+                            if sample.get('connected') and ceiling.get('fresh') and type(ceiling.get('forwarded_hz')) in (int, float):
+                                values['forwarded_demand_hz'] = {'value': ceiling['forwarded_hz']}
                             result.append({'ts': ts, 'values': {k: v['value'] for k, v in values.items()}})
                         result.reverse()
                     elif url.path == '/api/events':
@@ -262,8 +279,8 @@ def make_handler(supervisor, token, esp_token=''):
                     headers = {'X-HVAC-Lease':'1','X-HVAC-Boot':payload['boot_id']}
                     if command:
                         headers.update({'X-HVAC-Command':command['kind'],'X-HVAC-Id':command['id']})
-                        for key in ('mode','fan','temp','enabled','source'):
-                            if key in command: headers['X-HVAC-'+key.title()] = command[key]
+                        for key in ('mode','fan','temp','enabled','source','maximum_hz'):
+                            if key in command: headers['X-HVAC-'+key.replace('_','-').title()] = command[key]
                     return self.send(200, {'registered':True}, headers=headers)
                 except (ValueError,KeyError,TypeError): return self.send(409,{'error':'Telemetry rejected; lease not renewed'})
                 except sqlite3.Error: return self.send(503,{'error':'History storage unavailable; lease not renewed'})

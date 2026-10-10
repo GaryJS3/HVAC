@@ -6,6 +6,7 @@
 #include "HardwareConfig.h"
 #include "PassthroughBuffer.h"
 #include "RetryBackoff.h"
+#include "DemandCeiling.h"
 #ifndef HVAC_PROXY_BENCH
 #define HVAC_PROXY_BENCH 0
 #endif
@@ -48,6 +49,36 @@ public:
         Request.store(Enable ? 1 : 2);
         return true;
     }
+    void RenewControllerLease(uint64_t Now)
+    {
+        portENTER_CRITICAL(&PolicyLock); Ceiling.RenewLease(Now); portEXIT_CRITICAL(&PolicyLock);
+    }
+    bool SetCeiling(bool Enable, unsigned Hz, uint32_t Id)
+    {
+        if (!Compiled || !Ready || (Enable && (!Armed.load() || FaultActive()))) return false;
+        portENTER_CRITICAL(&PolicyLock);
+        const bool Ok = Ceiling.Configure(Enable, Hz, Id, esp_timer_get_time());
+        portEXIT_CRITICAL(&PolicyLock); return Ok;
+    }
+    String CeilingJson() const
+    {
+        DemandCeiling S;
+        portENTER_CRITICAL(&PolicyLock); S = Ceiling; portEXIT_CRITICAL(&PolicyLock);
+        const uint64_t Now = esp_timer_get_time();
+        String J = String("{\"supported\":") + (Compiled ? "true" : "false") + ",\"enabled\":" + (S.Enabled ? "true" : "false") +
+            ",\"maximum_hz\":" + S.MaximumHz + ",\"command_id\":" + S.CommandId + ",\"reason\":\"" + S.Reason +
+            "\",\"modified_frames\":" + S.ModifiedFrames + ",\"updated_us\":" + String((unsigned long long)S.LastDemandUs) +
+            ",\"fresh\":" + (S.LastDemandUs && Now - S.LastDemandUs <= 15000000u ? "true" : "false") +
+            ",\"requested_hz\":" + (S.HaveFrame ? String(S.RequestedHz) : String("null")) +
+            ",\"forwarded_hz\":" + (S.HaveFrame ? String(S.ForwardedHz) : String("null"));
+        for (unsigned K=0; K<2; ++K)
+        {
+            J += K ? ",\"last_sent_hex\":\"" : ",\"last_original_hex\":\"";
+            if (S.HaveFrame) for (unsigned I=0; I<20; ++I) { char H[3]; snprintf(H, sizeof(H), "%02X", K ? S.LastSent[I] : S.LastOriginal[I]); J += H; }
+            J += '"';
+        }
+        return J + "}";
+    }
     bool Probe(unsigned Port, uint32_t Id)
     {
         if (!Compiled || !Ready || Port > 1 || Armed.load() || Request.load() || ProbeBusy.exchange(true)) return false;
@@ -77,10 +108,13 @@ public:
     {
         if (!Compiled) return;
         const uint64_t Now = esp_timer_get_time();
+        const bool Healthy = !FaultActive();
+        portENTER_CRITICAL(&PolicyLock); Ceiling.Tick(Now, Healthy); portEXIT_CRITICAL(&PolicyLock);
         const unsigned Wanted = Request.load();
         if (Wanted == 2)
         {
             Armed.store(false); ++Epoch;
+            portENTER_CRITICAL(&PolicyLock); Ceiling.Configure(false, 0, 0, Now); portEXIT_CRITICAL(&PolicyLock);
             for (auto &B : Buffers) { DroppedBytes += B.Pending(); B.Reset(); }
             Request.store(0); CommandState.store(2);
         }
@@ -103,7 +137,7 @@ public:
             ",\"odu_to_idu_bytes\":" + DirectionBytes[0].load() + ",\"idu_to_odu_bytes\":" + DirectionBytes[1].load() +
             ",\"odu_to_idu_packets\":" + Packets[0].load() + ",\"idu_to_odu_packets\":" + Packets[1].load() +
             ",\"max_queue_us\":" + MaxQueueUs.load() + ",\"max_buffer_us\":" + MaxBufferUs.load() + ",\"max_tx_us\":" + MaxTxUs.load() +
-            ",\"queue_peak\":" + QueuePeak.load() + ",\"probe_id\":" + ProbeId.load() + ",\"probe_state\":" + ProbeState.load() + ",\"probes_passed\":" + ProbesPassed.load() + ",\"command_id\":" + CommandId.load() + ",\"command_state\":" + CommandState.load() + "}";
+            ",\"queue_peak\":" + QueuePeak.load() + ",\"probe_id\":" + ProbeId.load() + ",\"probe_state\":" + ProbeState.load() + ",\"probes_passed\":" + ProbesPassed.load() + ",\"command_id\":" + CommandId.load() + ",\"command_state\":" + CommandState.load() + ",\"ceiling\":" + CeilingJson() + "}";
     }
 private:
     struct Packet
@@ -116,6 +150,8 @@ private:
     PassthroughBuffer Buffers[2];
     QueueHandle_t Queue = nullptr;
     bool Ready = false;
+    mutable portMUX_TYPE PolicyLock = portMUX_INITIALIZER_UNLOCKED;
+    DemandCeiling Ceiling;
     std::atomic<unsigned> Request{0}, Epoch{0};
     std::atomic<uint32_t> LastRx[2]{}, RequestDeadline{0};
     mutable portMUX_TYPE FaultLock = portMUX_INITIALIZER_UNLOCKED;
@@ -195,9 +231,18 @@ private:
             if (esp_timer_get_time() >= IdleDeadline) { Self.RecordFault(P.Length); continue; }
             const uint64_t Started = esp_timer_get_time();
             Maximum(Self.MaxQueueUs, uint32_t(Started - P.QueuedUs));
-            const bool Ok = Transmit(1 - P.Source, P);
+            Packet Output = P;
+            const bool Healthy = !Self.FaultActive();
+            portENTER_CRITICAL(&Self.PolicyLock);
+            Self.Ceiling.Apply(P.Source, Output.Bytes, Output.Length, Started, Healthy);
+            portEXIT_CRITICAL(&Self.PolicyLock);
+            const bool Ok = Transmit(1 - P.Source, Output);
             Maximum(Self.MaxTxUs, uint32_t(esp_timer_get_time() - Started));
-            if (Ok) { Self.ForwardedBytes += P.Length; Self.DirectionBytes[P.Source] += P.Length; ++Self.Packets[P.Source]; }
+            if (Ok)
+            {
+                Self.ForwardedBytes += P.Length; Self.DirectionBytes[P.Source] += P.Length; ++Self.Packets[P.Source];
+                portENTER_CRITICAL(&Self.PolicyLock); Self.Ceiling.Sent(P.Source, P.Bytes, Output.Bytes, P.Length, esp_timer_get_time()); portEXIT_CRITICAL(&Self.PolicyLock);
+            }
             else Self.RecordFault(P.Length);
         }
     }

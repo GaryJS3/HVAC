@@ -67,6 +67,29 @@ class Tests(unittest.TestCase):
     def test_pending_command_blocks_second_write(self):
         self.s.register(self.payload); self.s.command(CLIMATE)
         with self.assertRaises(ValueError): self.s.command(CLIMATE)
+    def test_ceiling_requires_support_lease_armed_and_valid_range(self):
+        body={'kind':'demand_ceiling','enabled':True,'maximum_hz':20}
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command(body)
+        self.payload['device']['proxy']={'compiled':True,'armed':True,'ceiling':{'supported':True}}
+        self.s.register(self.payload)
+        for value in (True,19,121,20.5,'20'):
+            with self.assertRaises(ValueError): self.s.command({**body,'maximum_hz':value})
+        for key in ('armed','lease_active'):
+            target=self.payload['device']['proxy'] if key=='armed' else self.payload['device']
+            target[key]=False; self.s.register(self.payload)
+            with self.assertRaises(ValueError): self.s.command(body)
+            target[key]=True
+        self.s.register(self.payload)
+        result=self.s.command(body); sent=self.s.register(self.payload)
+        self.assertEqual(sent['id'],result['command_id'])
+        self.assertEqual((sent['enabled'],sent['maximum_hz']),(1,20))
+        self.assertIsNone(self.s.register(self.payload))
+    def test_ceiling_can_be_disabled_during_relay_fault(self):
+        self.payload['device']['proxy']={'compiled':True,'armed':False,'fault_active':True,'ceiling':{'supported':True}}
+        self.s.register(self.payload)
+        self.s.command({'kind':'demand_ceiling','enabled':False})
+        self.assertEqual(self.s.register(self.payload)['enabled'],0)
     def test_historical_relay_error_does_not_latch_controls(self):
         self.payload['device']['relay_errors']=3
         self.payload['device']['proxy']={'fault_active':False}
@@ -120,6 +143,17 @@ class Tests(unittest.TestCase):
                 self.assertEqual(response.headers['X-HVAC-Command'],'climate')
                 self.assertEqual(response.headers['X-HVAC-Temp'],'79')
             with post('/api/devices/register',self.payload,'device-test-token') as response: self.assertIsNone(response.headers.get('X-HVAC-Command'))
+            self.payload['device']['proxy']={'armed':True,'ceiling':{'supported':True}}
+            with post('/api/devices/register',self.payload,'device-test-token'): pass
+            with post('/api/command',{'kind':'demand_ceiling','enabled':True,'maximum_hz':20},'browser-test-token') as response: self.assertEqual(response.status,202)
+            with post('/api/devices/register',self.payload,'device-test-token') as response:
+                self.assertEqual(response.headers['X-HVAC-Command'],'demand_ceiling')
+                self.assertEqual(response.headers['X-HVAC-Maximum-Hz'],'20')
+            self.payload['device']['proxy']['ceiling'].update(fresh=True,forwarded_hz=20)
+            with post('/api/devices/register',self.payload,'device-test-token'): pass
+            req=urllib.request.Request(base+'/api/history',headers={'Authorization':'Bearer browser-test-token'})
+            with urllib.request.urlopen(req) as response:
+                self.assertEqual(json.load(response)[-1]['values']['forwarded_demand_hz'],20)
             with self.assertRaises(urllib.error.HTTPError): post('/api/devices/register',{},'device-test-token')
         finally: server.shutdown();server.server_close();thread.join()
 if __name__=='__main__': unittest.main()

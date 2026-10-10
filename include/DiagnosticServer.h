@@ -96,9 +96,9 @@ private:
         const bool Active = Network.Connected() || Lease.Active(esp_timer_get_time());
         String Json = String("{\"boot_id\":") + BootId + ",\"lease_active\":" + (Active ? "true" : "false") +
             ",\"lease_seconds\":10,\"proxy_enabled\":" + (Relay.Armed.load() ? "true" : "false") +
-            ",\"state\":\"" + (Relay.Armed.load() ? (Relay.Errors.load() ? "relay_fault" : (Active ? "supervised_passthrough" : "failover_passthrough")) : (Active ? "supervised_monitor" : "standalone_monitor")) +
+            ",\"state\":\"" + (Relay.Armed.load() ? (Relay.FaultActive() ? "relay_fault" : (Active ? "supervised_passthrough" : "failover_passthrough")) : (Active ? "supervised_monitor" : "standalone_monitor")) +
             "\",\"forwarded_bytes\":" + Relay.ForwardedBytes.load() + ",\"relay_errors\":" + Relay.Errors.load() +
-            ",\"capacity_override_supported\":false}";
+            ",\"capacity_override_supported\":" + (RelayService::Compiled ? "true" : "false") + ",\"ceiling\":" + Relay.CeilingJson() + "}";
         Server.send(200, "application/json", Json);
     }
     void XyeStatus()

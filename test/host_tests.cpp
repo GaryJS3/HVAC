@@ -6,6 +6,7 @@
 #include "ControllerLease.h"
 #include "PassthroughBuffer.h"
 #include "RetryBackoff.h"
+#include "DemandCeiling.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -53,6 +54,73 @@ unsigned ValidCount()
 }
 int main(int Argc, char **Argv)
 {
+    {
+        DemandCeiling Cap;
+        auto Indoor = Hex("A00100200C1101280000001A0F756A6400000000"); Fix(Indoor);
+        auto Outdoor = Hex("A00001200C122100007E7E6102A7018001000000"); Fix(Outdoor);
+        const auto Original = Indoor;
+        assert(!Cap.Configure(true,20,1,100)); // No controller authority.
+        Cap.RenewLease(100);
+        assert(!Cap.Configure(true,19,1,100));
+        assert(!Cap.Configure(true,121,1,100));
+        assert(Cap.Configure(true,20,1,100));
+        assert(!Cap.Apply(1,Indoor.data(),Indoor.size(),200,true)); // ODU cooling not established.
+        assert(Indoor == Original);
+        assert(!Cap.Apply(0,Outdoor.data(),Outdoor.size(),300,true));
+        assert(Cap.Apply(1,Indoor.data(),Indoor.size(),400,true));
+        assert(Indoor[7]==20);
+        assert(S1S2FrameParser::Crc(Indoor.data(),18)==uint16_t(Indoor[18]|Indoor[19]<<8));
+        for(unsigned I=0; I<18; ++I) if(I!=7) assert(Indoor[I]==Original[I]);
+        Cap.Sent(1,Original.data(),Indoor.data(),20,500);
+        assert(Cap.RequestedHz==40 && Cap.ForwardedHz==20 && Cap.ModifiedFrames==1);
+        for(uint8_t Request : {uint8_t(0),uint8_t(15),uint8_t(20),uint8_t(255)})
+        {
+            auto Frame=Original; Frame[7]=Request; Fix(Frame); const auto Before=Frame;
+            assert(!Cap.Apply(1,Frame.data(),20,600,true)); assert(Frame==Before);
+        }
+        for(uint8_t Mode : {uint8_t(0),uint8_t(2),uint8_t(3),uint8_t(4),uint8_t(7),uint8_t(10)})
+        {
+            auto Frame=Original; Frame[6]=Mode; Fix(Frame); const auto Before=Frame;
+            assert(!Cap.Apply(1,Frame.data(),20,600,true)); assert(Frame==Before);
+        }
+        auto Corrupt=Original; Corrupt[9]^=1; const auto Bad=Corrupt;
+        assert(!Cap.Apply(1,Corrupt.data(),20,600,true) && Corrupt==Bad);
+        auto Flagged=Original; Flagged[8]=0x80; Fix(Flagged); const auto FlagBefore=Flagged;
+        assert(!Cap.Apply(1,Flagged.data(),20,600,true) && Flagged==FlagBefore);
+        auto Frame=Original;
+        assert(!Cap.Apply(0,Frame.data(),20,600,true) && Frame==Original); // Wrong physical direction.
+        assert(!Cap.Apply(1,Frame.data(),19,600,true) && Frame==Original);
+        auto Ack=Original; Ack[3]=0x51; Fix(Ack); const auto AckBefore=Ack;
+        assert(!Cap.Apply(1,Ack.data(),20,600,true) && Ack==AckBefore);
+        auto Defrost=Outdoor; Defrost[14]=7; Fix(Defrost);
+        Cap.Apply(0,Defrost.data(),20,700,true);
+        assert(!Cap.Apply(1,Frame.data(),20,800,true) && Frame==Original);
+        Cap.Apply(0,Outdoor.data(),20,900,true);
+        assert(!Cap.Apply(1,Frame.data(),20,1000,false) && !Cap.Enabled && Frame==Original);
+        Cap.RenewLease(1100); assert(Cap.Configure(true,20,2,1100));
+        assert(!Cap.Apply(1,Frame.data(),20,10001100,true) && !Cap.Enabled && Frame==Original);
+        Cap.RenewLease(20000000); assert(!Cap.Enabled); // Recovery never silently re-enables.
+        assert(Cap.Configure(true,20,3,20000000));
+        assert(!Cap.Apply(1,Frame.data(),20,20000100,true) && Frame==Original); // Stale ODU mode.
+        assert(Cap.Configure(false,0,4,20000200) && !Cap.Enabled);
+        assert(!Cap.Apply(1,Frame.data(),20,20000300,true) && Frame==Original);
+        for (unsigned Maximum : {20u,40u,80u,120u})
+        {
+            DemandCeiling Policy; Policy.RenewLease(1);
+            assert(Policy.Configure(true,Maximum,1,1));
+            Policy.Apply(0,Outdoor.data(),20,2,true);
+            for (unsigned Requested=0; Requested<256; ++Requested)
+            {
+                auto Input=Original; Input[7]=Requested; Fix(Input); auto Output=Input;
+                const bool Changed=Policy.Apply(1,Output.data(),20,3,true);
+                const bool Expected=Requested<=120 && Requested>Maximum;
+                assert(Changed==Expected && Output[7]==(Expected?Maximum:Requested));
+                for(unsigned I=0; I<18; ++I) if(I!=7) assert(Input[I]==Output[I]);
+                assert(S1S2FrameParser::Crc(Output.data(),18)==uint16_t(Output[18]|Output[19]<<8));
+                if(!Expected) assert(Input==Output);
+            }
+        }
+    }
     CommunicationHealth Health;
     Health.RecordParserTruncation();
     Health.RecordUartFramingError();

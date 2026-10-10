@@ -19,7 +19,8 @@ forwarding never depends on an HTTP request or the container's scheduling.
 - `mitm` (and compatibility `proxy_bench`) adds explicitly armed, buffered
   forwarding to the opposite UART. Known-length frames are sent whole; noise and
   incomplete/damaged lengths drain after an 8 ms idle gap. Unknown commands and
-  invalid CRC bytes are preserved exactly. No capacity rewriting exists.
+  invalid CRC bytes are preserved exactly. An explicitly enabled cooling-demand
+  ceiling can lower validated IDU core requests; it starts disabled.
 
 The bench relay is not validated for installed HVAC. Its bounded queue, blocking
 TX completion and receiver-disable periods must be measured for latency, gaps,
@@ -34,7 +35,8 @@ Keep the installed unit on the receive-only S1/S2 profile until bench validation
 At boot the ESP has no supervisory lease. Successful authenticated outbound registration/telemetry exchanges
 renew it for 10 seconds using ESP monotonic time. Container failure, network loss
 or storage failure stops renewal. Once armed, MTM forwarding
-continues unchanged in both supervised and failover states. It is disarmed on
+continues in both supervised and failover states. An enabled demand ceiling
+expires on lease loss; failover forwards original packets. It is disarmed on
 every ESP reset and requires both transceiver bench tests again before arming. Monitoring profiles
 report standalone monitoring, never claim to be forwarding.
 
@@ -43,8 +45,8 @@ local transmit deadline after a successful exchange. Old commands are not persis
 after reconnection. C3 confirmation is a later matching C0 mode/setpoint/fan
 read-back, not just a successful socket write. A timeout is unverified, not proof
 the unit ignored a write. Applied climate settings remain on the factory unit;
-lease loss does not undo a thermostat setting. Future capacity policies must
-explicitly expire locally and require fresh authorization on recovery.
+lease loss does not undo a thermostat setting. The cooling-demand ceiling expires locally and requires explicit re-enabling
+after controller recovery.
 
 The browser is a client of the container. Closing a browser does not stop a healthy
 container's telemetry responses. ESP reset, loss of power or relay-task failure cannot be
@@ -212,3 +214,47 @@ still leaves local forwarding active; these changes do not implement power bypas
 Deploy the controller update and restart its container. The firmware update must
 be flashed with the HVAC on its stock bypass and the experimental harness isolated,
 then both bench probes repeated before reconnecting and arming.
+
+
+## Experimental cooling-demand ceiling
+
+Use the separate **Cooling demand ceiling** form to enable/update a whole-number
+20..120 Hz ceiling, or disable it. This is a software configuration range, not a
+validated operating-frequency range or a claim about the compressor minimum.
+For example, a factory 40 Hz request becomes 20 Hz with a 20 Hz ceiling; a 15 Hz
+or zero request remains unchanged. Acknowledgment confirms configuration only.
+Actual compressor Hz and factory protections remain independently controlled by
+the unit; live effectiveness and stability have not yet been established.
+
+The ESP rewrites only CRC-valid, exactly 20-byte IDU core frames arriving on the
+IDU port: address 0100, type 20, payload length 12, byte 5 equal to 11, indoor mode
+Cool (01), byte 8 zero, request byte 7 in 0..120. A recent (within 15 seconds)
+CRC-valid ODU core frame must also report outdoor Cool (01). It changes byte 7
+only when above the ceiling, then recomputes the two CRC bytes. Lower requests,
+heating, defrost, dry, forced modes, startup flags, unknown layouts, corrupt or
+truncated packets and all other fields pass unchanged. It never increases demand
+or fabricates responses. Unknown bytes/protection semantics are not decoded by
+this feature, so these guards do not constitute equipment qualification.
+
+The policy starts disabled and is never persisted as desired state. Enabling
+requires armed forwarding, a fresh controller lease and no active transport fault.
+Lease expiry (10 seconds), transport fault, disarm or reboot disables the policy;
+recovery does not silently re-enable it. Forwarding continues with original data.
+A packet already selected/in flight may finish before a disable takes effect.
+
+`device.proxy.ceiling` (also under local `/api/proxy`) reports configuration,
+command acknowledgment, reason, modification count, last original/sent hex and
+factory/forwarded demand from successfully transmitted IDU core frames. These
+are software TX observations, not an independent wire capture. Raw received
+frames remain original. The history selector compares factory demand, forwarded
+demand and decoded actual compressor frequency. Configuration commands are
+boot-bound, delivered once and audited, using `kind: demand_ceiling`, `enabled`
+and (when enabling) `maximum_hz`.
+
+Validation before live use: flash while bypassed/isolated, repeat both module
+probes, reconnect separated segments and arm with the ceiling disabled. Compare
+a baseline cooling ramp, then enable a conservative ceiling and compare original
+and sent hex/CRC, ODU target/actual frequency, temperatures, power and errors.
+Disable to verify original demand resumes. Finally test controller loss while
+limited and require the policy to expire with forwarding continuing; restore
+controller connectivity and require the ceiling to stay disabled.

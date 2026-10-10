@@ -187,7 +187,9 @@ host C++ tests and bench sender, offline XYE C0 response validation/status field
 The local controller adds SQLite history, a web dashboard and authenticated XYE
 mode/fan/temperature requests with read-back verification. A Cool/Auto 79→80→79°F write/restore test passed live. `mitm` and
 `proxy_bench` provide experimental forwarding, disarmed at boot and guarded by
-transceiver bench tests; no capacity rewriting, independent watchdog, hardware bypass,
+transceiver bench tests. An opt-in experimental cooling-demand ceiling can lower
+validated IDU requests while preserving other packet fields; it has not been
+live-validated. No independent watchdog, hardware bypass,
 solar or zoning controller is implemented. The default firmware cannot transmit;
 `xye_queries` keeps S1/S2 receive-only. See [the controller guide](docs/CONTROLLER.md)
 for capabilities, deployment and failure behavior.

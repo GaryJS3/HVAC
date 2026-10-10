@@ -88,7 +88,7 @@ private:
         J = String("{\"device_id\":\"") + WiFi.macAddress() + "\",\"boot_id\":" + BootId + ",\"device\":{\"lease_active\":" + Bool(Connected()) +
             ",\"proxy_enabled\":" + Bool(Relay.Armed.load()) + ",\"relay_errors\":" + Relay.Errors.load() +
             ",\"forwarded_bytes\":" + Relay.ForwardedBytes.load() + ",\"rejected_command_id\":" + RejectedCommand.load() +
-            ",\"state\":\"" + (Relay.Armed.load() ? (Relay.Errors.load() ? "relay_fault" : Connected() ? "supervised_passthrough" : "failover_passthrough") : Connected() ? "supervised_monitor" : "standalone_monitor") +
+            ",\"state\":\"" + (Relay.Armed.load() ? (Relay.FaultActive() ? "relay_fault" : Connected() ? "supervised_passthrough" : "failover_passthrough") : Connected() ? "supervised_monitor" : "standalone_monitor") +
             "\",\"capacity_override_supported\":false,\"proxy\":" + Relay.Json(Connected()) + "},\"status\":{\"uptime_us\":" + String((unsigned long long)Now) + ",\"ports\":[";
         for (unsigned P=0; P<2; ++P)
         {
@@ -112,7 +112,7 @@ private:
         auto &X=XyeSnapshot;
         J += String("]},\"xye\":{\"valid\":")+Bool(X.UpdatedUs!=0)+",\"stale\":"+Bool(SafetySupervisor::Stale(X.UpdatedUs,Now))+",\"armed\":"+Bool(X.Armed)+
             ",\"address\":"+(X.AddressValidated?String(X.Address):String("null"))+",\"replies\":"+String((unsigned long long)X.Replies)+",\"timeouts\":"+String((unsigned long long)X.Timeouts)+
-            ",\"command_id\":"+X.CommandId+",\"command_state\":"+X.CommandState+",\"mode\":"+X.Status.Mode+",\"fan\":"+X.Status.Fan+",\"setpoint_raw\":"+X.Status.SetpointRaw+",\"error_flags\":"+X.Status.ErrorFlags+",\"protection_flags\":"+X.Status.ProtectionFlags+",\"updated_us\":"+String((unsigned long long)X.UpdatedUs)+",\"queries\":"+String((unsigned long long)X.Queries)+",\"tx_errors\":"+String((unsigned long long)X.TxErrors)+",\"compiled\":"+Bool(XyeQueryController::Compiled)+"},\"frames\":[";
+            ",\"command_id\":"+X.CommandId+",\"command_state\":"+X.CommandState+",\"mode\":"+X.Status.Mode+",\"fan\":"+X.Status.Fan+",\"setpoint_raw\":"+X.Status.SetpointRaw+",\"error_flags\":"+X.Status.ErrorFlags+",\"protection_flags\":"+X.Status.ProtectionFlags+",\"updated_us\":"+String((unsigned long long)X.UpdatedUs)+",\"queries\":"+String((unsigned long long)X.Queries)+",\"tx_errors\":"+String((unsigned long long)X.TxErrors)+",\"failure_streak\":"+X.FailureStreak+",\"retry_delay_ms\":"+X.RetryDelayMs+",\"compiled\":"+Bool(XyeQueryController::Compiled)+"},\"frames\":[";
         for(size_t I=0; I<Snapshot.Count; ++I)
         {
             if(I) J += ',';
@@ -150,7 +150,7 @@ private:
                 if(Kind=="xye_polling" && Number(Http.header("X-HVAC-Enabled"),E) && E<=1) Ok=Xye.Arm(E==1);
                 if(Kind=="proxy" && Number(Http.header("X-HVAC-Enabled"),E) && E<=1) Ok=Relay.Arm(E==1,Id);
                 if(Kind=="proxy_probe" && Number(Http.header("X-HVAC-Source"),E) && E<=1) Ok=Relay.Probe(E,Id);
-                if(Kind=="climate" && !Relay.Errors.load() && Number(Http.header("X-HVAC-Mode"),M) && Number(Http.header("X-HVAC-Fan"),F) && Number(Http.header("X-HVAC-Temp"),T) && M<=255 && F<=255 && T>=60 && T<=86)
+                if(Kind=="climate" && !Relay.FaultActive() && Number(Http.header("X-HVAC-Mode"),M) && Number(Http.header("X-HVAC-Fan"),F) && Number(Http.header("X-HVAC-Temp"),T) && M<=255 && F<=255 && T>=60 && T<=86)
                     Ok=Xye.Set(M,F,T,Id,esp_timer_get_time()+2000000);
                 if(!Ok) RejectedCommand.store(Id);
             }

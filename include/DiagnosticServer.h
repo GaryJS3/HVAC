@@ -107,9 +107,9 @@ private:
         auto &S = XyeSnapshot;
         String Json = String("{\"compiled\":") + (XyeQueryController::Compiled ? "true" : "false") + ",\"ready\":" + (S.Ready ? "true" : "false") + ",\"armed\":" + (S.Armed ? "true" : "false");
         Json += String(",\"address_validated\":") + (S.AddressValidated ? "true" : "false") + ",\"address\":" + (S.AddressValidated ? String(S.Address) : String("null"));
-        const char *Names[] = {"queries", "replies", "timeouts", "invalid_candidates", "tx_errors", "updated_us"};
-        uint64_t Values[] = {S.Queries, S.Replies, S.Timeouts, S.InvalidCandidates, S.TxErrors, S.UpdatedUs};
-        for (unsigned I = 0; I < 6; ++I) Json += String(",\"") + Names[I] + "\":" + String(static_cast<unsigned long long>(Values[I]));
+        const char *Names[] = {"queries", "replies", "timeouts", "invalid_candidates", "tx_errors", "updated_us", "failure_streak", "retry_delay_ms"};
+        uint64_t Values[] = {S.Queries, S.Replies, S.Timeouts, S.InvalidCandidates, S.TxErrors, S.UpdatedUs, S.FailureStreak, S.RetryDelayMs};
+        for (unsigned I = 0; I < sizeof(Values) / sizeof(Values[0]); ++I) Json += String(",\"") + Names[I] + "\":" + String(static_cast<unsigned long long>(Values[I]));
         bool Valid = S.UpdatedUs != 0;
         Json += String(",\"valid\":") + (Valid ? "true" : "false") + ",\"stale\":" + (SafetySupervisor::Stale(S.UpdatedUs, esp_timer_get_time()) ? "true" : "false");
         Json += ",\"master_address\":" + String(XyeQueryController::MasterAddress);

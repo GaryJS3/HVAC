@@ -5,6 +5,7 @@
 #include "ByteHistory.h"
 #include "ControllerLease.h"
 #include "PassthroughBuffer.h"
+#include "RetryBackoff.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -247,5 +248,19 @@ int main(int Argc, char **Argv)
     Transport.Feed(0xA0, Clock); Transport.Reset();
     const size_t CountBefore = Forwarded.size(); Transport.Tick(Clock+10000);
     assert(Forwarded.size() == CountBefore && Transport.Pending() == 0);
+    RetryBackoff Retry;
+    const uint32_t Delays[] = {1000,2000,4000,8000,16000,30000,30000,30000};
+    for (auto Delay : Delays) assert(Retry.Fail() == Delay);
+    assert(Retry.Count() == 6);
+    Retry.Recover(); assert(Retry.Count() == 0 && Retry.Fail() == 1000);
+    TransportFaultWindow Fault;
+    assert(!Fault.Active(0));
+    const uint64_t LongUptime = 0xFFFFFFFFull + 1234;
+    Fault.Fail(LongUptime);
+    assert(Fault.Active(LongUptime + 9999999));
+    Fault.Fail(LongUptime + 9000000); // Further faults extend the pause.
+    assert(Fault.Active(LongUptime + 10000000));
+    assert(!Fault.Active(LongUptime + 19000000));
+    assert(!Fault.Active(LongUptime + 0x100000000ull));
     puts("All parser/decoder/safety tests passed.");
 }

@@ -172,3 +172,30 @@ when necessary. There is no power/reset hardware bypass in this prototype.
 The probes prove the module path only. Full directional byte fidelity, burst and
 latency measurements with an independent RS485 source/analyzer remain bench work
 before claiming the transport is production validated.
+
+## Transient fault recovery
+
+XYE polling stays armed after a transmit failure or missed reply. It backs off
+1, 2, 4, 8, 16, then at most 30 seconds between recovery attempts; a validated
+reply resets the backoff. Three consecutive response misses still invalidate
+the address and restart discovery. Explicitly switching polling off stops retries.
+`failure_streak` (saturated at 6) and `retry_delay_ms` expose recovery state;
+error/timeout totals remain cumulative. UART TX completion allows 150 ms for the
+33 ms query plus scheduling margin, and checks prior TX completion before sending.
+
+Relay queue/idle/TX faults continue to count errors and lost bytes while the
+worker keeps forwarding subsequent traffic. `proxy.fault_active` pauses climate
+changes and re-arming for 10 seconds after the latest fault, then automatically
+clears; historical totals alone do not latch controls off. Continued faults extend
+the pause. Older firmware without this field retains the previous conservative
+controller/UI behavior. Parser truncations and CRC failures do not stop transport.
+
+Uncertain relay packets and climate writes are never automatically retransmitted:
+they may already have reached the unit. Polling reads recover independently, and
+the command remains failed/unconfirmed until the operator reviews current status.
+Stale XYE/device telemetry still blocks climate changes. Controller/network loss
+still leaves local forwarding active; these changes do not implement power bypass.
+
+Deploy the controller update and restart its container. The firmware update must
+be flashed with the HVAC on its stock bypass and the experimental harness isolated,
+then both bench probes repeated before reconnecting and arming.

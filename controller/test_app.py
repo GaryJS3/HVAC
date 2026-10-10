@@ -67,6 +67,15 @@ class Tests(unittest.TestCase):
     def test_pending_command_blocks_second_write(self):
         self.s.register(self.payload); self.s.command(CLIMATE)
         with self.assertRaises(ValueError): self.s.command(CLIMATE)
+    def test_historical_relay_error_does_not_latch_controls(self):
+        self.payload['device']['relay_errors']=3
+        self.payload['device']['proxy']={'fault_active':False}
+        self.s.register(self.payload)
+        self.s.command(CLIMATE)
+        self.s.register(self.payload)
+        self.payload['device']['proxy']['fault_active']=True
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command(CLIMATE)
     def test_invalid_registration_does_not_renew(self):
         for payload in ({}, {**self.payload,'boot_id':True}, {**self.payload,'status':None}):
             with self.assertRaises(ValueError): self.s.register(payload)

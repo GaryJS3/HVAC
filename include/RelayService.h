@@ -5,6 +5,7 @@
 #include <atomic>
 #include "HardwareConfig.h"
 #include "PassthroughBuffer.h"
+#include "RetryBackoff.h"
 #ifndef HVAC_PROXY_BENCH
 #define HVAC_PROXY_BENCH 0
 #endif
@@ -20,6 +21,13 @@ public:
     std::atomic<uint32_t> ProbesPassed{0};
     std::atomic<uint32_t> ProbeId{0}, ProbeState{0}; // 0 none, 1 running, 2 passed, 3 failed
     std::atomic<uint32_t> CommandId{0}, CommandState{0};
+    bool FaultActive() const
+    {
+        portENTER_CRITICAL(&FaultLock);
+        const bool Active = FaultWindow.Active(esp_timer_get_time());
+        portEXIT_CRITICAL(&FaultLock);
+        return Active;
+    }
     RelayService() : Buffers{PassthroughBuffer(Emit, &Contexts[0]), PassthroughBuffer(Emit, &Contexts[1])}
     {
         Contexts[0] = {this, 0}; Contexts[1] = {this, 1};
@@ -33,7 +41,7 @@ public:
     }
     bool Arm(bool Enable, uint32_t Id = 0)
     {
-        if (!Compiled || !Ready || (Enable && (ProbeBusy.load() || Errors.load() || ProbesPassed.load() != 3))) return false;
+        if (!Compiled || !Ready || (Enable && (ProbeBusy.load() || FaultActive() || ProbesPassed.load() != 3))) return false;
         CommandId.store(Id); CommandState.store(1);
         RequestDeadline.store(uint32_t(esp_timer_get_time()) + 2000000);
         if (Enable && Armed.load()) { CommandState.store(2); return true; }
@@ -89,8 +97,9 @@ public:
     {
         return String("{\"compiled\":") + (Compiled ? "true" : "false") + ",\"armed\":" + (Armed.load() ? "true" : "false") +
             ",\"arm_pending\":" + (Request.load() == 1 ? "true" : "false") + ",\"state\":\"" +
-            (Errors.load() ? "transport_fault" : !Armed.load() ? "disarmed" : Connected ? "supervised_passthrough" : "failover_passthrough") +
-            "\",\"forwarded_bytes\":" + ForwardedBytes.load() + ",\"errors\":" + Errors.load() + ",\"dropped_bytes\":" + DroppedBytes.load() +
+            (FaultActive() ? "transport_fault" : !Armed.load() ? "disarmed" : Connected ? "supervised_passthrough" : "failover_passthrough") +
+            "\",\"fault_active\":" + (FaultActive() ? "true" : "false") +
+            ",\"forwarded_bytes\":" + ForwardedBytes.load() + ",\"errors\":" + Errors.load() + ",\"dropped_bytes\":" + DroppedBytes.load() +
             ",\"odu_to_idu_bytes\":" + DirectionBytes[0].load() + ",\"idu_to_odu_bytes\":" + DirectionBytes[1].load() +
             ",\"odu_to_idu_packets\":" + Packets[0].load() + ",\"idu_to_odu_packets\":" + Packets[1].load() +
             ",\"max_queue_us\":" + MaxQueueUs.load() + ",\"max_buffer_us\":" + MaxBufferUs.load() + ",\"max_tx_us\":" + MaxTxUs.load() +
@@ -109,6 +118,15 @@ private:
     bool Ready = false;
     std::atomic<unsigned> Request{0}, Epoch{0};
     std::atomic<uint32_t> LastRx[2]{}, RequestDeadline{0};
+    mutable portMUX_TYPE FaultLock = portMUX_INITIALIZER_UNLOCKED;
+    TransportFaultWindow FaultWindow;
+    void RecordFault(size_t Length)
+    {
+        portENTER_CRITICAL(&FaultLock);
+        FaultWindow.Fail(esp_timer_get_time());
+        portEXIT_CRITICAL(&FaultLock);
+        ++Errors; DroppedBytes += Length;
+    }
     portMUX_TYPE ProbeLock = portMUX_INITIALIZER_UNLOCKED;
     bool ProbeListening = false, ProbeMismatch = false;
     unsigned ProbeTarget = 0, ProbeUsed = 0, ProbeLength = 0;
@@ -125,7 +143,7 @@ private:
         memcpy(P.Bytes, Data, Length);
         Maximum(Self.MaxBufferUs, uint32_t(P.QueuedUs - First));
         (void)Last;
-        if (xQueueSend(Self.Queue, &P, 0) != pdTRUE) { ++Self.Errors; Self.DroppedBytes += Length; }
+        if (xQueueSend(Self.Queue, &P, 0) != pdTRUE) Self.RecordFault(Length);
         else Maximum(Self.QueuePeak, uxQueueMessagesWaiting(Self.Queue));
     }
     static bool Transmit(unsigned Target, const Packet &P)
@@ -174,13 +192,13 @@ private:
             while (uint32_t(esp_timer_get_time()) - Self.LastRx[1 - P.Source].load() < 8000 &&
                 Self.Armed.load() && P.Generation == Self.Epoch.load() && esp_timer_get_time() < IdleDeadline) vTaskDelay(1);
             if (!Self.Armed.load() || P.Generation != Self.Epoch.load()) { Self.DroppedBytes += P.Length; continue; }
-            if (esp_timer_get_time() >= IdleDeadline) { ++Self.Errors; Self.DroppedBytes += P.Length; continue; }
+            if (esp_timer_get_time() >= IdleDeadline) { Self.RecordFault(P.Length); continue; }
             const uint64_t Started = esp_timer_get_time();
             Maximum(Self.MaxQueueUs, uint32_t(Started - P.QueuedUs));
             const bool Ok = Transmit(1 - P.Source, P);
             Maximum(Self.MaxTxUs, uint32_t(esp_timer_get_time() - Started));
             if (Ok) { Self.ForwardedBytes += P.Length; Self.DirectionBytes[P.Source] += P.Length; ++Self.Packets[P.Source]; }
-            else { ++Self.Errors; Self.DroppedBytes += P.Length; }
+            else Self.RecordFault(P.Length);
         }
     }
 };

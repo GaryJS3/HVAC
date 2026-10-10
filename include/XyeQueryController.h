@@ -6,6 +6,7 @@
 #include "HardwareConfig.h"
 #include "XYEProtocol.h"
 #include "ByteHistory.h"
+#include "RetryBackoff.h"
 
 #ifndef HVAC_XYE_QUERIES
 #define HVAC_XYE_QUERIES 0
@@ -16,6 +17,7 @@ struct XyeDiagnostics
     bool Ready = false, Armed = false, AddressValidated = false;
     uint8_t Address = 0;
     uint64_t Queries = 0, Replies = 0, Timeouts = 0, InvalidCandidates = 0, TxErrors = 0;
+    uint32_t RetryDelayMs = 0, FailureStreak = 0;
     uint64_t UpdatedUs = 0;
     uint32_t CommandId = 0;
     uint8_t CommandState = 0; // 0 none, 1 sent, 2 verified, 3 expired/failed
@@ -90,6 +92,7 @@ public:
         {
             Waiting = false;
             ++State.Timeouts;
+            ScheduleRetry(Now);
             if (State.AddressValidated && ++ConsecutiveTimeouts >= 3)
             {
                 State.AddressValidated = false;
@@ -116,14 +119,12 @@ public:
                     XYEProtocol::BuildSet(State.Address, ExpectedMode, ExpectedFan, ExpectedTemp, Command, MasterAddress);
                 if (Ok)
                 {
-                    digitalWrite(HardwareConfig::XyeEn, HIGH); delayMicroseconds(10);
-                    const int N = uart_write_bytes(UART_NUM_0, Command, sizeof(Command));
-                    Ok = uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(60)) == ESP_OK && N == sizeof(Command);
-                    digitalWrite(HardwareConfig::XyeEn, LOW);
+                    Ok = Transmit(Command, sizeof(Command));
+                    if (!Ok) { ++State.TxErrors; ScheduleRetry(esp_timer_get_time()); }
                 }
                 State.CommandState = Ok ? 1 : 3;
                 VerificationDeadlineUs = esp_timer_get_time() + 5000000;
-                NextQueryUs = esp_timer_get_time() + 250000;
+                if (Ok) NextQueryUs = esp_timer_get_time() + 250000;
             }
         }
         // At most one C0 per second; skip rather than catch up. Require an idle
@@ -134,18 +135,13 @@ public:
             PendingAddress = State.AddressValidated ? State.Address : ScanAddress;
             uint8_t Query[16];
             XYEProtocol::BuildQuery(PendingAddress, Query, MasterAddress);
-            digitalWrite(HardwareConfig::XyeEn, HIGH);
-            delayMicroseconds(10);
-            int Written = uart_write_bytes(UART_NUM_0, Query, sizeof(Query));
-            esp_err_t Finished = uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(60));
-            digitalWrite(HardwareConfig::XyeEn, LOW);
+            const bool Sent = Transmit(Query, sizeof(Query));
             const uint64_t Done = esp_timer_get_time();
             NextQueryUs = Done + 1000000;
-            if (Written != sizeof(Query) || Finished != ESP_OK)
+            if (!Sent)
             {
                 ++State.TxErrors;
-                State.Armed = false;
-                Requested.store(false);
+                ScheduleRetry(Done);
             }
             else
             {
@@ -160,6 +156,24 @@ public:
         portEXIT_CRITICAL(&Lock);
     }
 private:
+    RetryBackoff Recovery;
+    void ScheduleRetry(uint64_t Now)
+    {
+        State.RetryDelayMs = Recovery.Fail();
+        State.FailureStreak = Recovery.Count();
+        NextQueryUs = Now + uint64_t(State.RetryDelayMs) * 1000;
+    }
+    static bool Transmit(const uint8_t *Data, size_t Length)
+    {
+        // Drain a previous uncertain TX before driving the bus again. Never
+        // retransmit a set command: it may already have reached the unit.
+        if (uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(150)) != ESP_OK) return false;
+        digitalWrite(HardwareConfig::XyeEn, HIGH); delayMicroseconds(10);
+        const int Written = uart_write_bytes(UART_NUM_0, Data, Length);
+        const bool Done = uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(150)) == ESP_OK;
+        digitalWrite(HardwareConfig::XyeEn, LOW);
+        return Written == int(Length) && Done;
+    }
     void Feed(uint8_t Byte, uint64_t Now)
     {
         if (!Used && Byte != 0xAA) return;
@@ -174,6 +188,8 @@ private:
             State.AddressValidated = true;
             State.UpdatedUs = Now;
             ++State.Replies;
+            Recovery.Recover(); State.RetryDelayMs = 0; State.FailureStreak = 0;
+            NextQueryUs = Now + 1000000;
             if (State.CommandState == 1 && XYEProtocol::MatchesSet(Reply, ExpectedMode, ExpectedFan, ExpectedTemp)) State.CommandState = 2;
             ConsecutiveTimeouts = 0;
             Waiting = false;

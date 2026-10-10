@@ -155,7 +155,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             state = self.snapshot()
             if not state.get('connected') or time.time() - state.get('sampled_at', 0) > 5:
                 raise ValueError('ESP data is stale or unavailable')
-            if state['device'].get('relay_errors', 0) and not (body.get('kind') == 'proxy' and body.get('enabled') is False):
+            if state['device'].get('proxy', {}).get('fault_active', bool(state['device'].get('relay_errors', 0))) and not (body.get('kind') == 'proxy' and body.get('enabled') is False):
                 raise ValueError('ESP relay reports a transport fault')
             kind = body.get('kind')
             if self.pending and self.pending['expires'] > time.time():

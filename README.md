@@ -47,6 +47,12 @@ Modules: 3.3 V VCC, common ESP ground. On the user's verified boards, module
 TXD is RO (chip pin 1), the output to ESP RX; module RXD is DI (chip pin 4),
 the input from reserved ESP TX. These labels are opposite the original assumption.
 GPIO34/35 are input-only without internal pull-ups.
+For the verified ODU module, install a 10 kΩ pull-up from ESP RX GPIO35
+to 3.3 V (module RO, labeled TXD). When EN disables the receiver during
+transmit, RO becomes high impedance. This pull-up stopped the observed ODU
+truncation/framing increments in the initial 220-second follow-up without
+a firmware change. Keep the separate EN-to-GND pulldown; do not put this
+pull-up on A/B or EN. Longer operation and another cooling cycle remain useful.
 Explicit RX assignments avoid UART1 flash pins. Monitoring profiles never assign
 the S1/S2 TX pins. For initial testing disconnect module RXD/DI and hard-disable DE
 after verifying the board's circuitry. EN LOW is a provisional assumption only.

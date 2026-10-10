@@ -52,6 +52,11 @@ unsigned ValidCount()
 }
 int main(int Argc, char **Argv)
 {
+    CommunicationHealth Health;
+    Health.RecordParserTruncation();
+    Health.RecordUartFramingError();
+    Health.RecordParserTruncation();
+    assert(Health.FramingErrors == 3 && Health.UartFramingErrors == 1 && Health.ParserTruncations == 2);
     ControllerLease Lease;
     assert(!Lease.Active(100));
     Lease.Renew(100);

@@ -16,8 +16,12 @@ struct CommunicationHealth
 {
     uint64_t Bytes = 0, Frames = 0, CrcFailures = 0;
     uint64_t FramingErrors = 0, ParityErrors = 0, RxOverruns = 0;
+    // FramingErrors remains the legacy combined total for existing clients.
+    uint64_t UartFramingErrors = 0, ParserTruncations = 0;
     uint64_t BufferFull = 0, DroppedBytes = 0, DropEvents = 0;
     uint64_t QueueSaturations = 0, LastByteUs = 0, LastValidUs = 0;
+    void RecordUartFramingError() { ++UartFramingErrors; ++FramingErrors; }
+    void RecordParserTruncation() { ++ParserTruncations; ++FramingErrors; }
 };
 enum class Confidence : uint8_t { ReferenceConfirmed, Probable, Unknown };
 struct Measurement

@@ -161,7 +161,10 @@ UART framing/parity errors and FIFO/buffer overruns are counted from IDF events.
 the hardware cannot report the exact number already lost in an overflowing
 FIFO. `drop_events` and `queue_saturations` flag incomplete accounting. Event
 queue saturation itself is best effort, not proof of zero event loss.
-Parser truncations also contribute to `framing_errors`. Noise preceding a
+`framing_errors` is a legacy combined counter: both hardware UART framing
+events and parser truncations increment it. Use `uart_framing_errors` and
+`parser_truncations` for separate counts; older firmware cannot distinguish
+these retrospectively. Noise preceding a
 preamble is counted by the parser internally. Raw history is not a permanent
 capture archive. Network JSON allocations occur outside the receive task.
 

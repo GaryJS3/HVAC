@@ -174,9 +174,9 @@ private:
             auto &H = Snapshot.Health[P];
             Json += "{\"port\":" + String(P) + ",\"stale\":" + (SafetySupervisor::Stale(H.LastValidUs, Now) ? "true" : "false");
             Json += String(",\"segment\":\"") + (P == 0 ? "odu" : "idu") + "\",\"rx_gpio\":" + String(P == 0 ? HardwareConfig::OduRx : HardwareConfig::IduRx);
-            const char *Names[] = {"bytes", "valid_frames", "crc_failures", "framing_errors", "parity_errors", "rx_overruns", "buffer_full", "known_dropped_bytes", "drop_events", "queue_saturations", "last_byte_us", "last_valid_us"};
-            uint64_t Values[] = {H.Bytes, H.Frames, H.CrcFailures, H.FramingErrors, H.ParityErrors, H.RxOverruns, H.BufferFull, H.DroppedBytes, H.DropEvents, H.QueueSaturations, H.LastByteUs, H.LastValidUs};
-            for (unsigned I = 0; I < 12; ++I)
+            const char *Names[] = {"bytes", "valid_frames", "crc_failures", "framing_errors", "parity_errors", "rx_overruns", "buffer_full", "known_dropped_bytes", "drop_events", "queue_saturations", "last_byte_us", "last_valid_us", "uart_framing_errors", "parser_truncations"};
+            uint64_t Values[] = {H.Bytes, H.Frames, H.CrcFailures, H.FramingErrors, H.ParityErrors, H.RxOverruns, H.BufferFull, H.DroppedBytes, H.DropEvents, H.QueueSaturations, H.LastByteUs, H.LastValidUs, H.UartFramingErrors, H.ParserTruncations};
+            for (unsigned I = 0; I < sizeof(Values) / sizeof(Values[0]); ++I)
                 Json += String(",\"") + Names[I] + "\":" + String(static_cast<unsigned long long>(Values[I]));
             Json += ",\"telemetry\":{";
             for (size_t I = 0; I < static_cast<size_t>(Field::Count); ++I)

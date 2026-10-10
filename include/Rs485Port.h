@@ -59,7 +59,7 @@ public:
             {
                 portENTER_CRITICAL(&Store.Lock);
                 auto &H = Store.Health[Index];
-                if (Event.type == UART_FRAME_ERR) ++H.FramingErrors;
+                if (Event.type == UART_FRAME_ERR) H.RecordUartFramingError();
                 if (Event.type == UART_PARITY_ERR) ++H.ParityErrors;
                 if (Event.type == UART_FIFO_OVF) ++H.RxOverruns;
                 if (Event.type == UART_BUFFER_FULL) ++H.BufferFull;

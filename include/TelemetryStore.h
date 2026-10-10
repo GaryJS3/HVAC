@@ -46,7 +46,7 @@ public:
             Health[Port].LastValidUs = F.LastUs;
         }
         else if (F.Result == FrameResult::CrcFailure) ++Health[Port].CrcFailures;
-        else ++Health[Port].FramingErrors;
+        else Health[Port].RecordParserTruncation();
         portEXIT_CRITICAL(&Lock);
     }
     void Snapshot(DiagnosticSnapshot &Out)

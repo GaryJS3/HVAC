@@ -95,9 +95,9 @@ private:
             if (P) J += ',';
             const auto &H = Snapshot.Health[P];
             J += String("{\"port\":") + P + ",\"stale\":" + Bool(SafetySupervisor::Stale(H.LastValidUs, Now));
-            const char *Names[] = {"bytes","valid_frames","crc_failures","framing_errors","parity_errors","rx_overruns","buffer_full","known_dropped_bytes","drop_events","queue_saturations","last_byte_us","last_valid_us"};
-            uint64_t Values[] = {H.Bytes,H.Frames,H.CrcFailures,H.FramingErrors,H.ParityErrors,H.RxOverruns,H.BufferFull,H.DroppedBytes,H.DropEvents,H.QueueSaturations,H.LastByteUs,H.LastValidUs};
-            for(unsigned I=0; I<12; ++I) J += String(",\"")+Names[I]+"\":"+String((unsigned long long)Values[I]);
+            const char *Names[] = {"bytes","valid_frames","crc_failures","framing_errors","parity_errors","rx_overruns","buffer_full","known_dropped_bytes","drop_events","queue_saturations","last_byte_us","last_valid_us","uart_framing_errors","parser_truncations"};
+            uint64_t Values[] = {H.Bytes,H.Frames,H.CrcFailures,H.FramingErrors,H.ParityErrors,H.RxOverruns,H.BufferFull,H.DroppedBytes,H.DropEvents,H.QueueSaturations,H.LastByteUs,H.LastValidUs,H.UartFramingErrors,H.ParserTruncations};
+            for(unsigned I=0; I<sizeof(Values)/sizeof(Values[0]); ++I) J += String(",\"")+Names[I]+"\":"+String((unsigned long long)Values[I]);
             J += ",\"telemetry\":{";
             for(size_t I=0; I<static_cast<size_t>(Field::Count); ++I)
             {

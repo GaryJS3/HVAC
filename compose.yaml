@@ -1,16 +1,48 @@
 name: hvac-controller
 services:
+  init-history:
+    image: python:3.12-slim
+    restart: "no"
+    user: "0:0"
+    command: [python, -c, "import os; os.chown('/data', 10001, 10001)"]
+    volumes:
+      - history:/data
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
   controller:
-    build: ./controller
+    image: python:3.12-slim
+    user: "10001:10001"
+    working_dir: /app
+    command: [python, app.py]
+    depends_on:
+      init-history:
+        condition: service_completed_successfully
     restart: unless-stopped
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      BIND: 0.0.0.0
+      DB_PATH: /data/hvac.sqlite
       ESP_TOKEN: ${ESP_TOKEN:?Set ESP_TOKEN to match the firmware}
       CONTROLLER_TOKEN: ${CONTROLLER_TOKEN:?Set a separate browser access key}
       CONTROL_ENABLED: ${CONTROL_ENABLED:-false}
     volumes:
       - history:/data
+      - type: bind
+        source: ./controller
+        target: /app
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 3s
     read_only: true
     tmpfs:
       - /tmp

@@ -55,9 +55,15 @@ those failures must preserve the factory electrical connection.
 2. Leave CONTROL_ENABLED=false initially. Set BIND_ADDRESS to the host's private
    LAN interface (or 0.0.0.0 on a trusted LAN). The default loopback binding is
    for local review/reverse proxy and cannot receive direct ESP LAN requests.
-3. Deploy the repository as a Compose stack: `docker compose up -d --build`.
-   History uses a named volume. The container runs as UID 10001 with a read-only
-   root filesystem. The user handles Dockhand deployment and Git syncing.
+3. Deploy the repository as a Compose stack: `docker compose up -d`.
+   No image build is required: both services use the official `python:3.12-slim`
+   image, and the controller mounts the Git-synced `controller/` directory read-only.
+   That directory must exist on the Docker host beside compose.yaml.
+   History uses a named volume. A one-shot `init-history` service sets its directory
+   owner to UID/GID 10001; successful exit is normal. The app runs as that non-root
+   user with a read-only root filesystem. The user handles Dockhand Git syncing.
+   Restart the controller service after syncing Python code changes; a running
+   Python process does not reload its modules automatically.
 4. Flash `xye_queries` for the currently jumpered topology. Open the ESP's
    HVAC-Diagnostics access point at http://192.168.4.1/. Enter Wi-Fi SSID/password,
    controller IP or DNS hostname, port (default 8080), and the matching ESP_TOKEN.
@@ -109,5 +115,19 @@ For a physical relay bench test, keep the HVAC disconnected. Send known and nois
 streams from each side separately and verify exact output bytes on the opposite
 side; then test simultaneous bursts, saturation, reboot, expired heartbeat and
 recovery. Measure wire timing externally. A successful compilation is not that
-validation. Container shutdown/restart, persistent volume ownership and actual
+validation. Container startup/shutdown, persistent volume ownership and actual
 Dockhand networking also require testing on the deployment host.
+
+## Dockhand build failure: /root/.docker is read-only
+
+The reported `Image hvac-controller Building` followed by
+`mkdir /root/.docker: read-only file system` happens in the deployment/build
+process before the app starts. The app service's `read_only: true` applies to the
+running container, so removing it would not repair the builder's filesystem.
+
+The default stack now uses a published Python image and has no `build:` section.
+Resync main and redeploy with the existing environment keys. This avoids the
+failing image-build step. The optional Dockerfile remains for environments with
+a working builder. If a subsequent pull also fails writing Docker client config,
+the Dockhand process itself needs a writable DOCKER_CONFIG directory; Compose
+service environment settings cannot change that parent process.

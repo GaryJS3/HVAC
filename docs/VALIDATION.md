@@ -132,3 +132,12 @@ All 11 registration/controller tests and the portable C++ suite pass. All three
 firmware profiles compile. The embedded setup page was reviewed in the browser
 using stub network status. This revision has not been flashed; saved NVS settings
 and real outbound ESP registration remain hardware/deployment checks.
+
+### Dockhand deployment without an image build, 2026-10-10
+
+Removed the default Compose build after Dockhand failed creating /root/.docker
+before app startup. The stack pulls official Python images, mounts synced source
+read-only and initializes the history volume for the non-root app UID. Docker
+Compose's official CLI validates the configuration; the controller's 11 tests
+still pass. This computer has no Docker daemon, so image pulls, Linux volume
+ownership and actual container startup remain deployment-host checks.

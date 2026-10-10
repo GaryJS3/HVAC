@@ -175,6 +175,16 @@ before claiming the transport is production validated.
 
 ## Transient fault recovery
 
+The dashboard shows six temperature cards in Fahrenheit and Celsius, plus all
+decoded fields separately for the IDU-side and ODU-side inputs. Each measurement
+includes freshness, age at the received sample, and interpretation confidence.
+Unavailable values remain labeled rather than displayed as zero; stale values
+are retained with a last-known label. Coil temperatures, discharge temperature,
+current, DC bus voltage and valve positions can also be selected in history.
+Diagnostics expose every communication counter, the complete XYE status, and
+the received snapshot for fields not yet given a dedicated display. Protocol
+power and other provisional fields retain their qualification labels.
+
 XYE polling stays armed after a transmit failure or missed reply. It backs off
 1, 2, 4, 8, 16, then at most 30 seconds between recovery attempts; a validated
 reply resets the backoff. Three consecutive response misses still invalidate

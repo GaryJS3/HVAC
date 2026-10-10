@@ -118,3 +118,17 @@ relay was enabled. Physical relay timing/byte fidelity, new C3 read-back on this
 ESP implementation, and lease expiry on actual hardware remain unvalidated.
 Docker is unavailable on the development computer, so the Docker image and Compose
 stack have not been run; Python application execution was tested directly.
+
+### Outbound ESP registration and saved network setup, 2026-10-10
+
+Replaced controller-to-ESP polling with authenticated ESP-initiated registration,
+telemetry upload and response-carried commands. Added persistent ESP setup page,
+MAC pairing, stale-data rejection, five-second pending command expiry and
+at-most-once delivery. Unit coverage includes restart persistence, duplicate
+frame handling, authentication separation, reboot, expiry and storage failure.
+Actual LAN registration and climate writes still require deployment validation.
+
+All 11 registration/controller tests and the portable C++ suite pass. All three
+firmware profiles compile. The embedded setup page was reviewed in the browser
+using stub network status. This revision has not been flashed; saved NVS settings
+and real outbound ESP registration remain hardware/deployment checks.

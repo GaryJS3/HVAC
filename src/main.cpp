@@ -14,7 +14,8 @@ TelemetryStore Store;
 RelayService Relay;
 Rs485Port Odu(UART_NUM_1, 0, Store), Idu(UART_NUM_2, 1, Store);
 XyeQueryController Xye;
-DiagnosticServer Diagnostics(Store, Xye);
+NetworkSetup Network(Store, Xye);
+DiagnosticServer Diagnostics(Store, Xye, Network);
 #if !HVAC_XYE_QUERIES
 SerialCapture SerialLog;
 void SerialTask(void *)
@@ -70,9 +71,7 @@ void setup()
     if (XyeQueryController::Compiled) esp_log_level_set("*", ESP_LOG_NONE);
     if (XyeQueryController::Compiled && (!Xye.Begin() ||
         xTaskCreatePinnedToCore(XyeTask, "XyeQueries", 4096, nullptr, 2, nullptr, 1) != pdPASS)) return;
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP("HVAC-Diagnostics", HVAC_AP_PASSWORD);
-    if (strlen(HVAC_WIFI_SSID)) WiFi.begin(HVAC_WIFI_SSID, HVAC_WIFI_PASSWORD);
+    Network.Begin();
     Diagnostics.Begin();
 #if !HVAC_XYE_QUERIES
     Serial.print("Receive only. Diagnostic AP: ");

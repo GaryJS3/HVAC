@@ -262,3 +262,11 @@ Read-only diagnostics remain available on the trusted diagnostic network.
 Mutation endpoints require the configured controller bearer token. Live C0
 polling at address 0/master 63 has been validated; new C3 writes are not yet
 live-validated. No new firmware is automatically flashed by a container deployment.
+
+## ESP registration and network setup
+
+The ESP home page configures Wi-Fi, controller hostname/IP, port and device key.
+Settings persist across restart; the diagnostic AP remains available. The ESP
+registers with the controller and uploads telemetry every two seconds. Commands
+return in those responses, so no ESP address is configured on the controller.
+See [deployment and failover details](docs/CONTROLLER.md).

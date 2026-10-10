@@ -8,16 +8,18 @@
 #include "ControllerLease.h"
 #include "ControllerConfig.h"
 #include "RelayService.h"
+#include "NetworkSetup.h"
+#include "SetupPage.h"
 
 class DiagnosticServer
 {
 public:
-    DiagnosticServer(TelemetryStore &Store, XyeQueryController &Xye) : Store(Store), Xye(Xye) {}
+    DiagnosticServer(TelemetryStore &Store, XyeQueryController &Xye, NetworkSetup &Network) : Store(Store), Xye(Xye), Network(Network) {}
     void Begin()
     {
         const char *Headers[] = {"Authorization"};
         Server.collectHeaders(Headers, 1);
-        BootId = esp_random();
+        BootId = Network.BootId;
         Server.on("/api/controller", HTTP_GET, [this]() { ControllerStatus(); });
         Server.on("/api/controller/heartbeat", HTTP_POST, [this]()
         {
@@ -45,9 +47,22 @@ public:
             bool Ok = Xye.Set(M, F, T, Id, Lease.Deadline() < Now + 2000000 ? Lease.Deadline() : Now + 2000000);
             Server.send(Ok ? 202 : 409, "application/json", Ok ? String("{\"accepted\":true,\"command_id\":") + Id + "}" : "{\"error\":\"XYE unavailable or command pending\"}");
         });
-        Server.on("/", [this]()
+        Server.on("/", [this]() { Server.send_P(200, "text/html", SetupPage); });
+        Server.on("/api/network", HTTP_GET, [this]()
         {
-            Server.send(200, "text/html", "<h1>Senville diagnostics</h1><p><a href='/api/status'>Status and telemetry</a> | <a href='/api/frames'>Recent frames</a> | <a href='/api/bytes'>Raw UART bytes</a> | <a href='/api/xye'>XYE status</a></p><p>Port 0: ODU segment, GPIO35; port 1: IDU segment, GPIO33. Raw chunks are UART drain batches, not protocol frames.</p>");
+            String J = String("{\"ssid\":\"") + Escape(Network.Ssid) + "\",\"controller_host\":\"" + Escape(Network.ControllerHost) + "\",\"controller_port\":" + Network.ControllerPort +
+                ",\"key_configured\":" + (Network.Token.length() >= 16 ? "true" : "false") + ",\"wifi_connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
+                ",\"registered\":" + (Network.Connected() ? "true" : "false") + ",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+            Server.send(200, "application/json", J);
+        });
+        Server.on("/api/network", HTTP_POST, [this]()
+        {
+            if (Network.Token.length() >= 16) { if (!Authorize()) return; }
+            else if (Server.client().localIP() != WiFi.softAPIP()) { Server.send(403, "application/json", "{\"error\":\"Initial setup requires diagnostic Wi-Fi\"}"); return; }
+            String Port = Server.arg("port"); long N = Port.toInt();
+            if (N < 1 || N > 65535 || Port != String(N) || !Network.Save(Server.arg("ssid"), Server.arg("password"), Server.arg("host"), N, Server.arg("token"), Server.arg("open") == "1"))
+            { Server.send(400, "application/json", "{\"error\":\"Invalid settings or storage unavailable. Device key needs 16 characters.\"}"); return; }
+            Server.send(200, "application/json", "{\"saved\":true}"); RestartAt = millis() + 1000;
         });
         Server.on("/api/status", HTTP_GET, [this]() { Status(); });
         Server.on("/api/frames", HTTP_GET, [this]() { Frames(); });
@@ -67,16 +82,17 @@ public:
         });
         Server.begin();
     }
-    void Poll() { Server.handleClient(); }
+    void Poll() { Server.handleClient(); if (RestartAt && int32_t(millis()-RestartAt)>=0) ESP.restart(); }
 private:
+    static String Escape(const String &S) { String R; for (size_t I=0; I<S.length(); ++I) { char C=S[I]; if(C=='"'||C=='\\') R+='\\'; if(uint8_t(C)<32) R+=' '; else R+=C; } return R; }
     bool Authorize()
     {
-        if (strlen(HVAC_CONTROLLER_TOKEN) >= 16 && Server.header("Authorization") == String("Bearer ") + HVAC_CONTROLLER_TOKEN) return true;
+        if (Network.Token.length() >= 16 && Server.header("Authorization") == String("Bearer ") + Network.Token) return true;
         Server.send(401, "application/json", "{\"error\":\"controller token required\"}"); return false;
     }
     void ControllerStatus()
     {
-        const bool Active = Lease.Active(esp_timer_get_time());
+        const bool Active = Network.Connected() || Lease.Active(esp_timer_get_time());
         String Json = String("{\"boot_id\":") + BootId + ",\"lease_active\":" + (Active ? "true" : "false") +
             ",\"lease_seconds\":10,\"proxy_enabled\":" + (RelayService::Compiled ? "true" : "false") +
             ",\"state\":\"" + (RelayService::Compiled ? (Relay.Errors.load() ? "relay_fault" : (Active ? "supervised_passthrough" : "failover_passthrough")) : (Active ? "supervised_monitor" : "standalone_monitor")) +
@@ -207,6 +223,8 @@ private:
     }
     TelemetryStore &Store;
     XyeQueryController &Xye;
+    NetworkSetup &Network;
+    uint32_t RestartAt = 0;
     XyeDiagnostics XyeSnapshot;
     WebServer Server{80};
     ControllerLease Lease;

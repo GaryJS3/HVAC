@@ -1,6 +1,8 @@
+import copy
 import json
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -8,111 +10,82 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer
 from app import Supervisor, make_handler
 
+CLIMATE = {'kind':'climate','mode':'cool','fan':'auto','temperature_f':79}
 class Tests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.s = Supervisor(str(Path(self.tmp.name) / 'history.sqlite'), 'http://unused', 'esp-test-token', control=True)
-        self.calls = []
-        self.uptime = 1000
-        self.fail = False
-        self.s.esp = self.esp
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def esp(self, path, fields=None):
-        self.calls.append((path, fields))
-        if self.fail:
-            raise OSError('network lost')
-        if path == '/api/status':
-            return {'uptime_us': self.uptime, 'ports': []}
-        if path == '/api/xye':
-            return {'valid': True, 'stale': False}
-        if path.startswith('/api/controller'):
-            return {'boot_id': 42, 'lease_active': True}
-        if path == '/api/frames':
-            return {'frames': [{'port': 0, 'first_us': 1, 'last_us': 2, 'hex': 'A0', 'result': 'truncated'}]}
-        if path == '/api/xye/set':
-            return {'accepted': True, 'command_id': 1}
-        return {}
-
+        self.s = Supervisor(str(Path(self.tmp.name)/'history.sqlite'), control=True)
+        self.payload = {'device_id':'AA:BB:CC:DD:EE:FF', 'boot_id':42, 'status':{'uptime_us':1000,'ports':[]},
+            'xye':{'valid':True,'stale':False}, 'device':{'lease_active':True},
+            'frames':[{'port':0,'first_us':1,'last_us':2,'hex':'A0','result':'truncated'}]}
+    def tearDown(self): self.tmp.cleanup()
     def test_history_deduplicates_frames_and_survives_restart(self):
-        self.s.poll(); self.s.poll()
-        with self.s.db() as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM frames').fetchone()[0], 1)
-            self.assertEqual(db.execute('SELECT count(*) FROM samples').fetchone()[0], 2)
-        restored = Supervisor(self.s.db_path, 'http://unused', '', demo=True)
+        self.s.register(self.payload); self.s.register(self.payload)
+        restored=Supervisor(self.s.db_path)
         with restored.db() as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM samples').fetchone()[0], 2)
-
-    def test_network_loss_stops_heartbeat_and_rejects_commands(self):
-        self.s.poll()
-        self.calls.clear(); self.fail = True; self.s.poll()
+            self.assertEqual(db.execute('SELECT count(*) FROM frames').fetchone()[0],1)
+            self.assertEqual(db.execute('SELECT count(*) FROM samples').fetchone()[0],2)
+    def test_device_pairing_survives_restart(self):
+        self.s.register(self.payload)
+        restored=Supervisor(self.s.db_path)
+        with self.assertRaises(ValueError): restored.register({**self.payload,'device_id':'11:22:33:44:55:66'})
+        self.assertIsNone(restored.register(self.payload))
+    def test_command_is_delivered_once_in_next_registration(self):
+        self.s.register(self.payload)
+        result=self.s.command(CLIMATE)
+        command=self.s.register(self.payload)
+        self.assertEqual(command['id'],result['command_id'])
+        self.assertEqual((command['mode'],command['fan'],command['temp']),(136,128,79))
+        self.assertIsNone(self.s.register(self.payload))
+    def test_expired_command_never_replayed(self):
+        self.s.register(self.payload); self.s.command(CLIMATE)
+        self.s.pending['expires']=time.time()-1
+        self.assertIsNone(self.s.register(self.payload))
+        self.assertIsNone(self.s.register(self.payload))
+    def test_reboot_clears_pending_command(self):
+        self.s.register(self.payload); self.s.command(CLIMATE)
+        self.payload['boot_id']=43
+        self.assertIsNone(self.s.register(self.payload))
+    def test_stale_data_disables_control(self):
+        self.s.register(self.payload); self.s.state['sampled_at']=time.time()-11
         self.assertFalse(self.s.snapshot()['connected'])
-        self.assertFalse(any('/heartbeat' in p for p, _ in self.calls))
-        with self.assertRaises(ValueError):
-            self.s.command({'kind': 'climate', 'mode': 'cool', 'fan': 'auto', 'temperature_f': 79})
-
-    def test_no_command_replay_after_recovery(self):
-        self.s.poll()
-        result = self.s.command({'kind': 'climate', 'mode': 'cool', 'fan': 'auto', 'temperature_f': 79})
-        self.assertEqual(result['command_id'], 1)
-        self.fail = True; self.s.poll(); self.fail = False; self.s.poll()
-        writes = [(p, f) for p, f in self.calls if p == '/api/xye/set']
-        self.assertEqual(len(writes), 1)
-        self.assertEqual(writes[0][1]['boot_id'], 42)
-
-    def test_invalid_controls_and_demo_are_rejected(self):
-        self.s.poll()
-        for body in ({'kind':'climate','mode':'cool','fan':'turbo','temperature_f':79},
-                     {'kind':'climate','mode':'cool','fan':'auto','temperature_f':True},
-                     {'kind':'capacity','hz':75}):
+        with self.assertRaises(ValueError): self.s.command(CLIMATE)
+    def test_storage_failure_withholds_lease_and_command(self):
+        self.s.register(self.payload); self.s.command(CLIMATE)
+        def broken(): raise OSError('disk full')
+        self.s.db=broken
+        with self.assertRaises(ValueError): self.s.register(self.payload)
+        self.assertFalse(self.s.snapshot()['connected'])
+    def test_invalid_control_demo_and_relay_fault(self):
+        self.s.register(self.payload)
+        for body in ({**CLIMATE,'fan':'turbo'},{**CLIMATE,'temperature_f':True},{'kind':'capacity','hz':75}):
             with self.assertRaises(ValueError): self.s.command(body)
-        demo = Supervisor(self.s.db_path, 'http://unused', '', demo=True, control=True)
-        demo.poll()
-        with self.assertRaises(ValueError): demo.command({'kind':'xye_polling','enabled':True})
-
-    def test_storage_failure_stops_heartbeat(self):
-        self.s.poll(); self.calls.clear()
-        def broken_db(): raise OSError('disk full')
-        self.s.db = broken_db
-        self.s.poll()
-        self.assertFalse(self.s.snapshot()['connected'])
-        self.assertFalse(any('/heartbeat' in p for p, _ in self.calls))
-
-    def test_indeterminate_command_is_not_retried(self):
-        self.s.poll(); self.fail = True
-        with self.assertRaisesRegex(ValueError, 'outcome unknown'):
-            self.s.command({'kind':'climate','mode':'cool','fan':'auto','temperature_f':79})
-        self.fail = False; self.s.poll()
-        self.assertEqual(sum(p == '/api/xye/set' for p, _ in self.calls), 1)
-        with self.s.db() as db:
-            self.assertEqual(db.execute("SELECT count(*) FROM events WHERE kind='command_indeterminate'").fetchone()[0], 1)
-
-    def test_inactive_lease_and_relay_fault_reject_commands(self):
-        self.s.poll()
-        self.s.state['device']['lease_active'] = False
-        with self.assertRaises(ValueError): self.s.command({'kind':'xye_polling','enabled':True})
-        self.s.state['device']['lease_active'] = True
-        self.s.state['device']['relay_errors'] = 1
-        with self.assertRaises(ValueError): self.s.command({'kind':'xye_polling','enabled':True})
-
-    def test_http_authentication_and_command_route(self):
-        self.s.poll()
-        server = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(self.s, 'browser-test-token'))
-        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
-        base = 'http://127.0.0.1:' + str(server.server_port)
+        self.s.state['device']['relay_errors']=1
+        with self.assertRaises(ValueError): self.s.command(CLIMATE)
+        demo=Supervisor(self.s.db_path,demo=True,control=True); demo.poll()
+        with self.assertRaises(ValueError): demo.command(CLIMATE)
+    def test_pending_command_blocks_second_write(self):
+        self.s.register(self.payload); self.s.command(CLIMATE)
+        with self.assertRaises(ValueError): self.s.command(CLIMATE)
+    def test_invalid_registration_does_not_renew(self):
+        for payload in ({}, {**self.payload,'boot_id':True}, {**self.payload,'status':None}):
+            with self.assertRaises(ValueError): self.s.register(payload)
+    def test_http_device_auth_and_response_command(self):
+        server=ThreadingHTTPServer(('127.0.0.1',0),make_handler(self.s,'browser-test-token','device-test-token'))
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        base='http://127.0.0.1:'+str(server.server_port)
+        def post(path,body,key):
+            return urllib.request.urlopen(urllib.request.Request(base+path,data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'}))
         try:
-            with self.assertRaises(urllib.error.HTTPError) as caught:
-                urllib.request.urlopen(base + '/api/state')
-            self.assertEqual(caught.exception.code, 401)
-            request = urllib.request.Request(base + '/api/command',
-                data=json.dumps({'kind':'climate','mode':'cool','fan':'auto','temperature_f':79}).encode(),
-                headers={'Authorization':'Bearer browser-test-token', 'Content-Type':'application/json'})
-            with urllib.request.urlopen(request) as response:
-                self.assertEqual(response.status, 202)
-                self.assertTrue(json.load(response)['accepted'])
-        finally:
-            server.shutdown(); server.server_close(); worker.join()
-
-if __name__ == '__main__': unittest.main()
+            with self.assertRaises(urllib.error.HTTPError) as caught: post('/api/devices/register',self.payload,'browser-test-token')
+            self.assertEqual(caught.exception.code,401)
+            with post('/api/devices/register',self.payload,'device-test-token') as response:
+                self.assertEqual(response.headers['X-HVAC-Lease'],'1')
+            with post('/api/command',CLIMATE,'browser-test-token') as response: self.assertEqual(response.status,202)
+            with post('/api/devices/register',self.payload,'device-test-token') as response:
+                self.assertEqual(response.headers['X-HVAC-Command'],'climate')
+                self.assertEqual(response.headers['X-HVAC-Temp'],'79')
+            with post('/api/devices/register',self.payload,'device-test-token') as response: self.assertIsNone(response.headers.get('X-HVAC-Command'))
+            with self.assertRaises(urllib.error.HTTPError): post('/api/devices/register',{},'device-test-token')
+        finally: server.shutdown();server.server_close();thread.join()
+if __name__=='__main__': unittest.main()

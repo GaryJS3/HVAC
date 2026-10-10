@@ -28,14 +28,14 @@ Keep the installed unit on the receive-only S1/S2 profile until bench validation
 
 ## Failure and recovery contract
 
-At boot the ESP has no supervisory lease. Successful authenticated heartbeats
+At boot the ESP has no supervisory lease. Successful authenticated outbound registration/telemetry exchanges
 renew it for 10 seconds using ESP monotonic time. Container failure, network loss
 or storage failure stops renewal. In the bench relay profile, raw forwarding
 continues unchanged in both supervised and failover states. Monitoring profiles
 report standalone monitoring, never claim to be forwarding.
 
-Commands carry the current ESP boot ID and expire within two seconds, bounded by
-the lease deadline. Old commands are not persisted as desired state or replayed
+Delivered commands are tied to the current ESP boot ID and have a two-second
+local transmit deadline after a successful exchange. Old commands are not persisted as desired state or replayed
 after reconnection. C3 confirmation is a later matching C0 mode/setpoint/fan
 read-back, not just a successful socket write. A timeout is unverified, not proof
 the unit ignored a write. Applied climate settings remain on the factory unit;
@@ -43,28 +43,49 @@ lease loss does not undo a thermostat setting. Future capacity policies must
 explicitly expire locally and require fresh authorization on recovery.
 
 The browser is a client of the container. Closing a browser does not stop a healthy
-container's heartbeat. ESP reset, loss of power or relay-task failure cannot be
+container's telemetry responses. ESP reset, loss of power or relay-task failure cannot be
 covered by software forwarding. A normally closed physical bypass is needed if
 those failures must preserve the factory electrical connection.
 
 ## Configure and deploy
 
-1. In ignored `include/LocalConfig.h`, configure the normal LAN Wi-Fi SSID/password
-   and a random `HVAC_CONTROLLER_TOKEN` (at least 16 characters). Keep diagnostic
-   AP access for recovery. Build `xye_queries` for the currently jumpered topology.
-2. Copy `.env.example` to ignored `.env`. Set ESP_URL to the ESP's reachable LAN
-   IP, ESP_TOKEN to the firmware token, and CONTROLLER_TOKEN to a different random
-   browser key. The Dockhand host must have a route to that IP; 192.168.4.1 is only
-   usable from a host attached to the diagnostic AP.
-3. Leave CONTROL_ENABLED=false initially. Set BIND_ADDRESS to the intended private
-   host interface if direct LAN access is wanted, or leave loopback for a reverse
-   proxy. Do not publish this control service directly to the Internet.
-4. Deploy this workspace as a Compose stack: `docker compose up -d --build`.
-   Dockhand must receive the controller build context as well as compose.yaml.
-   An existing stack needs the matching environment values. History uses a named
-   volume. The container runs as UID 10001 with a read-only root filesystem.
-5. Open port 8080 and enter CONTROLLER_TOKEN. Confirm current telemetry and
-   heartbeat status. Set CONTROL_ENABLED=true only when ready to validate writes.
+1. Copy `.env.example` to ignored `.env`. Set ESP_TOKEN to a random device key
+   of at least 16 characters and CONTROLLER_TOKEN to a different browser key.
+   There is no ESP_URL or ESP IP setting in the controller.
+2. Leave CONTROL_ENABLED=false initially. Set BIND_ADDRESS to the host's private
+   LAN interface (or 0.0.0.0 on a trusted LAN). The default loopback binding is
+   for local review/reverse proxy and cannot receive direct ESP LAN requests.
+3. Deploy the repository as a Compose stack: `docker compose up -d --build`.
+   History uses a named volume. The container runs as UID 10001 with a read-only
+   root filesystem. The user handles Dockhand deployment and Git syncing.
+4. Flash `xye_queries` for the currently jumpered topology. Open the ESP's
+   HVAC-Diagnostics access point at http://192.168.4.1/. Enter Wi-Fi SSID/password,
+   controller IP or DNS hostname, port (default 8080), and the matching ESP_TOKEN.
+   Blank password/key fields preserve existing values; the open-network checkbox
+   explicitly clears a saved Wi-Fi password. Saving restarts the ESP.
+5. Existing configurations require the current device key to change settings.
+   An initial unconfigured ESP permits setup only through its diagnostic AP.
+   The page never returns saved passwords or keys. Settings persist in one NVS
+   record across restarts. LocalConfig.h still supplies initial defaults and the
+   diagnostic AP password. The diagnostic AP remains available for recovery.
+6. The ESP initiates an authenticated POST to `/api/devices/register` every two
+   seconds, containing stable MAC identity, boot ID, telemetry and recent frames.
+   The controller pairs with the first ESP and persists that identity. This
+   initial version handles one ESP per controller instance. To replace an ESP,
+   remove only the `device_id` row from the SQLite settings table while stopped.
+7. Open the controller on port 8080 and enter CONTROLLER_TOKEN. Confirm fresh
+   telemetry. Set CONTROL_ENABLED=true when ready to validate climate writes.
+
+Commands return in the next ESP registration response, never through an inbound
+connection to the ESP. Only one command may wait at a time; it expires after five
+seconds and is dropped on an ESP reboot. Delivery is attempted once. A lost HTTP
+response can leave an unknown outcome; check live settings before retrying. The
+ESP validates commands locally and reports rejection or subsequent XYE read-back.
+No queued command survives a container restart. Success responses renew the local
+10-second lease only after telemetry is saved. No response means no renewal.
+Frame history deduplicates overlapping ESP ring snapshots. This is best-effort
+archival: a network outage or ring overflow can lose frames; the ESP does not have
+a durable capture spool.
 
 The application uses Python's standard library and runs without pip packages.
 Its built-in HTTP server is intended for this private local deployment. Use a

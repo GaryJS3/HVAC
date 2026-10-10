@@ -1,0 +1,27 @@
+name: hvac-controller
+services:
+  controller:
+    build: ./controller
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    environment:
+      ESP_URL: ${ESP_URL:?Set ESP_URL to the ESP LAN address}
+      ESP_TOKEN: ${ESP_TOKEN:?Set ESP_TOKEN to match the firmware}
+      CONTROLLER_TOKEN: ${CONTROLLER_TOKEN:?Set a separate browser access key}
+      CONTROL_ENABLED: ${CONTROL_ENABLED:-false}
+    volumes:
+      - history:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  history:

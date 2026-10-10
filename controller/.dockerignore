@@ -1,0 +1,4 @@
+data/
+__pycache__/
+test_app.py
+test-results/

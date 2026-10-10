@@ -141,3 +141,15 @@ read-only and initializes the history volume for the non-root app UID. Docker
 Compose's official CLI validates the configuration; the controller's 11 tests
 still pass. This computer has no Docker daemon, so image pulls, Linux volume
 ownership and actual container startup remain deployment-host checks.
+
+### First live ESP registration, 2026-10-10
+
+Flashed xye_queries on COM5 and verified flash hashes. User saved network settings
+and corrected controller port to 8122. Live registration succeeds, the ESP reports
+supervised_monitor and both S1/S2 taps receive valid frames with zero CRC errors
+or UART overruns. XYE polling remains disarmed; no climate write or relay was enabled.
+
+Observed approximately 39 seconds of controller/computer clock difference. The
+browser now trusts the controller's computed connected flag for sample freshness
+and measures its command-confirmation wait from local receipt, avoiding comparisons
+between clocks on different machines. History timestamps remain controller-based.

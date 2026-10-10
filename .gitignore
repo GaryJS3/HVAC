@@ -1,0 +1,11 @@
+.pio/
+.reference-*/
+include/LocalConfig.h
+tools/__pycache__/
+build/
+.env
+controller/data/
+controller/__pycache__/
+.codex-remote-attachments/
+captures/
+controller/test-results/

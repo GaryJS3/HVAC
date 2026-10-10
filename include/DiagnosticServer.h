@@ -20,6 +20,7 @@ public:
         const char *Headers[] = {"Authorization"};
         Server.collectHeaders(Headers, 1);
         BootId = Network.BootId;
+        Server.on("/api/proxy", HTTP_GET, [this]() { Server.send(200, "application/json", Relay.Json(Network.Connected())); });
         Server.on("/api/controller", HTTP_GET, [this]() { ControllerStatus(); });
         Server.on("/api/controller/heartbeat", HTTP_POST, [this]()
         {
@@ -94,8 +95,8 @@ private:
     {
         const bool Active = Network.Connected() || Lease.Active(esp_timer_get_time());
         String Json = String("{\"boot_id\":") + BootId + ",\"lease_active\":" + (Active ? "true" : "false") +
-            ",\"lease_seconds\":10,\"proxy_enabled\":" + (RelayService::Compiled ? "true" : "false") +
-            ",\"state\":\"" + (RelayService::Compiled ? (Relay.Errors.load() ? "relay_fault" : (Active ? "supervised_passthrough" : "failover_passthrough")) : (Active ? "supervised_monitor" : "standalone_monitor")) +
+            ",\"lease_seconds\":10,\"proxy_enabled\":" + (Relay.Armed.load() ? "true" : "false") +
+            ",\"state\":\"" + (Relay.Armed.load() ? (Relay.Errors.load() ? "relay_fault" : (Active ? "supervised_passthrough" : "failover_passthrough")) : (Active ? "supervised_monitor" : "standalone_monitor")) +
             "\",\"forwarded_bytes\":" + Relay.ForwardedBytes.load() + ",\"relay_errors\":" + Relay.Errors.load() +
             ",\"capacity_override_supported\":false}";
         Server.send(200, "application/json", Json);
@@ -164,7 +165,7 @@ private:
         String Json;
         Json.reserve(12000);
         Xye.Snapshot(XyeSnapshot);
-        Json = String("{\"receive_only\":") + (XyeSnapshot.Armed || RelayService::Compiled ? "false" : "true") + ",\"xye_enabled\":" + (XyeQueryController::Compiled ? "true" : "false") + ",\"proxy_enabled\":" + (RelayService::Compiled ? "true" : "false") + ",\"uart_ready\":true,\"uptime_us\":" + String(static_cast<unsigned long long>(Now));
+        Json = String("{\"receive_only\":") + (XyeSnapshot.Armed || Relay.Armed.load() ? "false" : "true") + ",\"xye_enabled\":" + (XyeQueryController::Compiled ? "true" : "false") + ",\"proxy_enabled\":" + (Relay.Armed.load() ? "true" : "false") + ",\"uart_ready\":true,\"uptime_us\":" + String(static_cast<unsigned long long>(Now));
         Json += ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"ap_ip\":\"" + WiFi.softAPIP().toString() + "\",\"history_evictions\":" + String(static_cast<unsigned long long>(Snapshot.HistoryEvictions));
         Json += ",\"ports\":[";
         for (unsigned P = 0; P < 2; ++P)

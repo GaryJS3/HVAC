@@ -9,29 +9,33 @@ forwarding never depends on an HTTP request or the container's scheduling.
 - Two receive-only S1/S2 inputs and optional XYE status polling.
 - Authenticated heartbeat, a 10-second local lease and boot identity.
 - C3 mode/fan/temperature requests, bounded pending work, no automatic retries,
-  and C0 read-back status. Builders follow the user's working AC project. New
-  writes still require live validation. Temperature is the unit's raw Fahrenheit
+  and C0 read-back status. Builders follow the user's working AC project. A 79→80→79°F Cool/Auto setpoint test passed with XYE read-back; other
+  mode/fan combinations still need live validation. Temperature is the unit's raw Fahrenheit
   byte, restricted to whole 60..86 F. Fan supports auto/low/medium/high; turbo
   encoding is unverified and is not offered.
 - Web dashboard, frequency/fan/power/temperature history, communication counters,
   raw frame archive and command audit trail. SQLite retains 30 days of records;
   chart API displays the latest 1,800 samples. Power remains provisional.
-- Separate `proxy_bench` build relays raw incoming chunks to the other UART,
-  including unknown commands and invalid CRCs. No capacity rewriting exists.
+- `mitm` (and compatibility `proxy_bench`) adds explicitly armed, buffered
+  forwarding to the opposite UART. Known-length frames are sent whole; noise and
+  incomplete/damaged lengths drain after an 8 ms idle gap. Unknown commands and
+  invalid CRC bytes are preserved exactly. No capacity rewriting exists.
 
 The bench relay is not validated for installed HVAC. Its bounded queue, blocking
 TX completion and receiver-disable periods must be measured for latency, gaps,
 echo and simultaneous traffic. FIFO/queue errors are visible and indicate loss,
-not successful failover. This profile must never run with A-A/B-B jumpers between
-the two modules: that would feed forwarded traffic back into the same bus.
+not successful failover. Forwarding must never be armed with A-A/B-B jumpers between
+the two modules: that would feed forwarded traffic back into the same bus. The
+MTM build starts disarmed, so it can be flashed with those jumpers still installed.
 Keep the installed unit on the receive-only S1/S2 profile until bench validation.
 
 ## Failure and recovery contract
 
 At boot the ESP has no supervisory lease. Successful authenticated outbound registration/telemetry exchanges
 renew it for 10 seconds using ESP monotonic time. Container failure, network loss
-or storage failure stops renewal. In the bench relay profile, raw forwarding
-continues unchanged in both supervised and failover states. Monitoring profiles
+or storage failure stops renewal. Once armed, MTM forwarding
+continues unchanged in both supervised and failover states. It is disarmed on
+every ESP reset and requires both transceiver bench tests again before arming. Monitoring profiles
 report standalone monitoring, never claim to be forwarding.
 
 Delivered commands are tied to the current ESP boot ID and have a two-second
@@ -133,3 +137,38 @@ failing image-build step. The optional Dockerfile remains for environments with
 a working builder. If a subsequent pull also fails writing Docker client config,
 the Dockhand process itself needs a writable DOCKER_CONFIG directory; Compose
 service environment settings cannot change that parent process.
+
+## MTM bring-up sequence
+
+1. Flash `python -m platformio run -e mitm -t upload --upload-port COM5`.
+   Saved Wi-Fi/controller settings survive flashing. All direction pins start LOW;
+   both S1/S2 drivers stay disabled until explicit arming or a requested bench probe.
+2. Keep the ESP powered over USB. Disconnect the HVAC harness from the unit; put
+   the unit back on its stock/bypass cable if it needs to keep operating. Leave
+   just the two S1/S2 modules connected together with their A-A/B-B jumpers.
+3. Sync main and restart the controller Python service for its new command routes.
+   Under MTM forwarding → Transceiver bench test, confirm HVAC is disconnected.
+   Run ODU module TX and IDU module TX separately. Each sends 24 diagnostic bytes
+   from one module and requires an exact match at the other. This checks TX/RX,
+   EN assignment and differential polarity; it is not a complete relay timing test.
+4. Both tests must pass in this ESP boot before arming is accepted. Keep the ESP
+   powered, remove A-A/B-B jumpers, then reconnect the HVAC harness with IDU and ODU
+   on separate module segments. Confirm the separated-segments checkbox and arm.
+   Arming waits for 100 ms quiet on both inputs and expires after two seconds if
+   that is not possible. Watch both directional byte counters, temperatures,
+   unit operation and all transport errors during the initial supervised test.
+5. Record queue delay, assembly delay and TX duration. These are UART-drain/task
+   metrics, not oscilloscope wire timing. Output is serialized, and waits at least
+   8 ms after target RX activity. A bounded queue or UART fault can still lose bytes;
+   errors/dropped-byte counters are explicit. Unknown/noisy data is never rewritten.
+6. Disconnect controller networking while observing the ESP and HVAC locally.
+   Forwarding must keep operating as failover_passthrough. Restore networking and
+   confirm supervised_passthrough without replaying old commands.
+
+Disarming completes any packet already being transmitted; buffered/queued data is
+then discarded and counted rather than replayed on a later arm. Disarming or an
+ESP reset stops the electrical bridge, so restore physical jumpers/stock bypass
+when necessary. There is no power/reset hardware bypass in this prototype.
+The probes prove the module path only. Full directional byte fidelity, burst and
+latency measurements with an independent RS485 source/analyzer remain bench work
+before claiming the transport is production validated.

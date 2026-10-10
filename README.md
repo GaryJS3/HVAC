@@ -173,14 +173,14 @@ typed core and performance telemetry, freshness, Wi-Fi AP/station HTTP diagnosti
 host C++ tests and bench sender, offline XYE C0 response validation/status fields.
 
 The local controller adds SQLite history, a web dashboard and authenticated XYE
-mode/fan/temperature requests with read-back verification. Writes have not yet
-been validated live. `proxy_bench` provides experimental raw forwarding for a
-disconnected bench; no capacity rewriting, independent watchdog, hardware bypass,
+mode/fan/temperature requests with read-back verification. A Cool/Auto 79→80→79°F write/restore test passed live. `mitm` and
+`proxy_bench` provide experimental forwarding, disarmed at boot and guarded by
+transceiver bench tests; no capacity rewriting, independent watchdog, hardware bypass,
 solar or zoning controller is implemented. The default firmware cannot transmit;
 `xye_queries` keeps S1/S2 receive-only. See [the controller guide](docs/CONTROLLER.md)
 for capabilities, deployment and failure behavior.
 
-A future proxy needs arbitration, TX-complete handling, measured timing, hardware
+The proxy still needs independent wire-timing validation, hardware
 fail-safe normally-bypassed relay and independent watchdog. A software watchdog
 cannot make a dead ESP electrically transparent. Never alter protection/fault
 messages, and never infer permission to increase demand from missing telemetry.

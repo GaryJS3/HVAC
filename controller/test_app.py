@@ -70,6 +70,31 @@ class Tests(unittest.TestCase):
     def test_invalid_registration_does_not_renew(self):
         for payload in ({}, {**self.payload,'boot_id':True}, {**self.payload,'status':None}):
             with self.assertRaises(ValueError): self.s.register(payload)
+    def test_proxy_requires_firmware_and_topology_confirmation(self):
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command({'kind':'proxy','enabled':True,'segments_separated':True})
+        self.payload['device']['proxy']={'compiled':True,'armed':False,'probes_passed':3}
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command({'kind':'proxy','enabled':True})
+        result=self.s.command({'kind':'proxy','enabled':True,'segments_separated':True})
+        delivered=self.s.register(self.payload)
+        self.assertEqual(delivered['id'],result['command_id'])
+        self.assertEqual(delivered['enabled'],1)
+    def test_probe_requires_disconnected_hvac_and_disarmed_relay(self):
+        self.payload['device']['proxy']={'compiled':True,'armed':False}
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command({'kind':'proxy_probe','source':0})
+        with self.assertRaises(ValueError): self.s.command({'kind':'proxy_probe','source':True,'hvac_disconnected':True})
+        self.s.command({'kind':'proxy_probe','source':1,'hvac_disconnected':True})
+        self.assertEqual(self.s.register(self.payload)['source'],1)
+        self.payload['device']['proxy']['armed']=True;self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command({'kind':'proxy_probe','source':0,'hvac_disconnected':True})
+    def test_proxy_disarm_is_allowed_during_transport_fault(self):
+        self.payload['device']={'relay_errors':1,'proxy':{'compiled':True,'armed':True}}
+        self.s.register(self.payload)
+        with self.assertRaises(ValueError): self.s.command(CLIMATE)
+        self.s.command({'kind':'proxy','enabled':False})
+        self.assertEqual(self.s.register(self.payload)['enabled'],0)
     def test_http_device_auth_and_response_command(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),make_handler(self.s,'browser-test-token','device-test-token'))
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()

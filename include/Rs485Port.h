@@ -43,7 +43,7 @@ public:
                     if (N <= 0) break;
                     Left -= N;
                     const uint64_t Now = esp_timer_get_time();
-                    Relay.Submit(Index, Buffer, N);
+                    Relay.Submit(Index, Buffer, N, Now);
                     portENTER_CRITICAL(&Store.Lock);
                     Store.Health[Index].Bytes += N;
                     Store.Health[Index].LastByteUs = Now;

@@ -160,3 +160,20 @@ Successful sign-in now saves the browser key in per-tab sessionStorage and resto
 it on reload. Added Sign out, timer cleanup and invalid-key session clearing.
 Reviewed in isolated demo: login, reload retained the dashboard, Sign out then
 reload returned to login. JavaScript syntax check passes. No equipment writes sent.
+
+### Live XYE write/restore and MTM preparation, 2026-10-10
+
+XYE unit address 0, master 63: Cool/Auto 79°F changed to 80°F and restored to 79°F.
+Both commands reached verified state 2 through later C0 read-back. Zero XYE
+query timeouts/TX errors and zero S1/S2 CRC errors or overruns during this test.
+Evidence is in ignored captures/xye-control-test/*.json and events.jsonl.
+
+Added an MTM profile with boot-disarmed operation, per-direction counters,
+queue/assembly/TX timing, error/loss counters, expiring arm requests and two
+explicitly requested transceiver probes. Both probes must pass in the same boot
+before arming. Portable tests exercise exact bytes for known frames, invalid CRC,
+unknown commands, truncated lengths, long noisy input and reset. Fourteen
+controller tests cover compiled-profile/topology checks, probe preconditions and
+fault-state disarming. Physical module probes and live bridging remain pending.
+
+- Final validation: all four PlatformIO profiles built; portable C++ tests and 14 controller tests passed. MTM firmware uploaded to COM5 with verified flash hash. Live device reports compiled=true, armed=false, probes_passed=0; both passive ports received 133 valid frames without CRC errors or RX overruns after reboot. Network settings survived. Physical transmit tests and separated-bus forwarding remain pending.

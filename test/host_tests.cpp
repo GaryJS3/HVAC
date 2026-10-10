@@ -4,12 +4,21 @@
 #include "SafetySupervisor.h"
 #include "ByteHistory.h"
 #include "ControllerLease.h"
+#include "PassthroughBuffer.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 #include <string>
 
+std::vector<uint8_t> Forwarded;
+std::vector<size_t> PacketSizes;
+void Forward(void *, const uint8_t *Data, size_t Length, uint64_t First, uint64_t Last)
+{
+    assert(Length > 0 && Length <= MaxFrameSize && Last >= First);
+    Forwarded.insert(Forwarded.end(), Data, Data + Length);
+    PacketSizes.push_back(Length);
+}
 std::vector<RawFrame> Results;
 void Collect(void *, const RawFrame &F) { Results.push_back(F); }
 std::vector<uint8_t> Hex(const char *Text)
@@ -186,5 +195,42 @@ int main(int Argc, char **Argv)
             puts("");
         }
     }
+    // Proxy transport preserves exact byte sequence independently of CRC/parser.
+    Forwarded.clear(); PacketSizes.clear();
+    PassthroughBuffer Transport(Forward, nullptr);
+    auto Known = Hex("A0000120080102030405060708000000");
+    uint64_t Clock = 1;
+    for (uint8_t Byte : Known) { Transport.Feed(Byte, Clock); Clock += 2084; }
+    assert(Forwarded == Known && PacketSizes.size() == 1);
+    // Invalid CRCs and unknown commands are not filtered or duplicated.
+    Known[3] = 0xFE; Known.back() ^= 0xFF;
+    for (uint8_t Byte : Known) { Transport.Feed(Byte, Clock); Clock += 2084; }
+    std::vector<uint8_t> ExpectedStream = Forwarded;
+    assert(PacketSizes.size() == 2 && PacketSizes[1] == Known.size());
+    // Truncation is buffered until the bounded idle flush.
+    const uint8_t Partial[] = {0xA0,0,1,0x20,255,0x77};
+    for (uint8_t Byte : Partial) { Transport.Feed(Byte, Clock); ExpectedStream.push_back(Byte); Clock += 2084; }
+    const size_t BeforeIdle = Forwarded.size();
+    Transport.Tick(Clock - 2084 + 7999);
+    assert(Forwarded.size() == BeforeIdle);
+    Transport.Tick(Clock - 2084 + 8000);
+    assert(Forwarded.size() == ExpectedStream.size());
+    assert(Forwarded.size() > BeforeIdle);
+    assert(Forwarded == ExpectedStream && Transport.Pending() == 0);
+    // Long arbitrary noisy input, maximum lengths and embedded preambles.
+    Forwarded.clear(); PacketSizes.clear(); ExpectedStream.clear();
+    uint32_t Seed = 17;
+    for (unsigned I=0; I<20000; ++I)
+    {
+        Seed = Seed * 1664525u + 1013904223u;
+        const uint8_t Byte = Seed >> 24;
+        ExpectedStream.push_back(Byte); Transport.Feed(Byte, Clock); Clock += 2084;
+    }
+    Transport.Tick(Clock + 8000);
+    assert(Forwarded == ExpectedStream);
+    // Reset discards buffered data; it never leaks into a newly armed session.
+    Transport.Feed(0xA0, Clock); Transport.Reset();
+    const size_t CountBefore = Forwarded.size(); Transport.Tick(Clock+10000);
+    assert(Forwarded.size() == CountBefore && Transport.Pending() == 0);
     puts("All parser/decoder/safety tests passed.");
 }

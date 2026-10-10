@@ -155,12 +155,29 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             state = self.snapshot()
             if not state.get('connected') or time.time() - state.get('sampled_at', 0) > 5:
                 raise ValueError('ESP data is stale or unavailable')
-            if state['device'].get('relay_errors', 0):
+            if state['device'].get('relay_errors', 0) and not (body.get('kind') == 'proxy' and body.get('enabled') is False):
                 raise ValueError('ESP relay reports a transport fault')
             kind = body.get('kind')
             if self.pending and self.pending['expires'] > time.time():
                 raise ValueError('A command is already pending')
-            if kind == 'xye_polling':
+            if kind in ('proxy','proxy_probe'):
+                proxy = state['device'].get('proxy',{})
+                if not proxy.get('compiled'):
+                    raise ValueError('MTM firmware required')
+                if kind == 'proxy':
+                    if not isinstance(body.get('enabled'),bool):
+                        raise ValueError('enabled must be boolean')
+                    if body['enabled'] and body.get('segments_separated') is not True:
+                        raise ValueError('Remove A-A/B-B jumpers and confirm separated segments first')
+                    fields = {'enabled':int(body['enabled'])}
+                else:
+                    if proxy.get('armed') or proxy.get('arm_pending') or body.get('hvac_disconnected') is not True:
+                        raise ValueError('Disarmed proxy and disconnected HVAC harness required')
+                    source = body.get('source')
+                    if type(source) is not int or source not in (0,1):
+                        raise ValueError('source must be 0 or 1')
+                    fields = {'source':source}
+            elif kind == 'xye_polling':
                 if not isinstance(body.get('enabled'), bool):
                     raise ValueError('enabled must be boolean')
                 fields = {'enabled': int(body['enabled'])}
@@ -181,7 +198,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             item = {'id':self.next_id, 'kind':kind, 'boot_id':state['device']['boot_id'], 'expires':time.time()+5, **fields}
             self.event('command_requested', item)
             self.pending = item
-            return {'accepted':True, 'command_id':item['id'] if kind == 'climate' else None, 'expires_at':item['expires']}
+            return {'accepted':True, 'command_id':item['id'] if kind in ('climate','proxy','proxy_probe') else None, 'expires_at':item['expires']}
 
 def make_handler(supervisor, token, esp_token=''):
     class Handler(BaseHTTPRequestHandler):
@@ -245,7 +262,7 @@ def make_handler(supervisor, token, esp_token=''):
                     headers = {'X-HVAC-Lease':'1','X-HVAC-Boot':payload['boot_id']}
                     if command:
                         headers.update({'X-HVAC-Command':command['kind'],'X-HVAC-Id':command['id']})
-                        for key in ('mode','fan','temp','enabled'):
+                        for key in ('mode','fan','temp','enabled','source'):
                             if key in command: headers['X-HVAC-'+key.title()] = command[key]
                     return self.send(200, {'registered':True}, headers=headers)
                 except (ValueError,KeyError,TypeError): return self.send(409,{'error':'Telemetry rejected; lease not renewed'})

@@ -43,6 +43,7 @@ void ReceiveTask(void *)
     {
         Idu.Poll();
         Odu.Poll();
+        Relay.Poll();
         Store.Publish();
         vTaskDelay(1);
     }

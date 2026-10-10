@@ -37,6 +37,9 @@ after disabling software diagnostics; see its separate instructions below.
 
 ## Wiring and electrical prerequisites
 
+See [hardware stabilization and acceptance](docs/HARDWARE-STABILITY.md) for the
+current wiring checks, measurement record, bypass topology and bring-up order.
+
 | Interface | UART | RX | Reserved TX (not routed) | EN |
 |---|---|---|---|---|
 | XYE | 0, unused | 34 | 25 | 26 |

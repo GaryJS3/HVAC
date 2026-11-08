@@ -16,7 +16,14 @@ services:
     image: python:3.12-slim
     user: "10001:10001"
     working_dir: /app
-    command: [python, app.py]
+    command:
+      - sh
+      - -ec
+      - |
+        if [ -n "$$MQTT_HOST" ] && python -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: --timeout 5 --retries 1 --target /tmp/hvac-mqtt -r /app/requirements-mqtt.txt; then
+          export PYTHONPATH=/tmp/hvac-mqtt
+        fi
+        exec python app.py
     depends_on:
       init-history:
         condition: service_completed_successfully
@@ -31,6 +38,12 @@ services:
       ESP_TOKEN: ${ESP_TOKEN:?Set ESP_TOKEN to match the firmware}
       CONTROLLER_TOKEN: ${CONTROLLER_TOKEN:?Set a separate browser access key}
       CONTROL_ENABLED: ${CONTROL_ENABLED:-false}
+      MQTT_HOST: ${MQTT_HOST:-}
+      MQTT_PORT: ${MQTT_PORT:-}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      MQTT_TLS: ${MQTT_TLS:-false}
+      MQTT_DISCOVERY_PREFIX: ${MQTT_DISCOVERY_PREFIX:-homeassistant}
     volumes:
       - history:/data
       - type: bind

@@ -15,12 +15,28 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parent
+CLIMATE_MODES = {'off': 0, 'fan': 129, 'dry': 130, 'heat': 132, 'cool': 136}
+CLIMATE_FANS = {'auto': 128, 'high': 1, 'medium': 2, 'low': 4}
+
+
+def climate_readback(xye):
+    mode = xye.get('mode')
+    fan = xye.get('fan')
+    if type(fan) is int and fan & 128:
+        fan = 128
+    return {
+        'mode': next((name for name, code in CLIMATE_MODES.items() if code == mode), None),
+        'fan': next((name for name, code in CLIMATE_FANS.items() if code == fan), None),
+        'temperature_f': xye.get('setpoint_raw'),
+    }
+
 
 class Supervisor:
-    def __init__(self, db_path, demo=False, control=False):
+    def __init__(self, db_path, demo=False, control=False, mqtt_enabled=False):
         self.db_path = db_path
         self.demo, self.control = demo, control and not demo
         self.lock, self.command_lock, self.stop = threading.Lock(), threading.Lock(), threading.Event()
+        self.mqtt_status = 'waiting_for_esp' if mqtt_enabled and not demo else 'disabled'
         self.state = {'connected': False, 'demo': demo, 'control_enabled': self.control, 'error': 'Waiting for first sample'}
         self.boot = 'legacy-start'
         self.last_uptime = 0
@@ -56,6 +72,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
     def snapshot(self):
         with self.lock:
             result = json.loads(json.dumps(self.state))
+            result['mqtt_status'] = self.mqtt_status
         if time.time() - result.get('sampled_at', 0) > 8:
             result['connected'] = False
             result['error'] = 'Waiting for fresh ESP telemetry'
@@ -148,7 +165,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             self.poll()
             self.stop.wait(2)
 
-    def command(self, body):
+    def command(self, body, *, partial_climate=False):
         if not self.control:
             raise ValueError('Control is disabled for this deployment')
         with self.command_lock:
@@ -196,15 +213,19 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
                     raise ValueError('enabled must be boolean')
                 fields = {'enabled': int(body['enabled'])}
             elif kind == 'climate':
-                if body.get('mode') not in ('off', 'cool', 'heat', 'dry', 'fan') or body.get('fan') not in ('auto', 'low', 'medium', 'high'):
+                xye = state.get('xye', {})
+                if not xye.get('valid') or xye.get('stale'):
+                    raise ValueError('Fresh XYE status required')
+                if partial_climate:
+                    if xye.get('command_state') == 1:
+                        raise ValueError('Waiting for XYE command verification')
+                    body = {**climate_readback(xye), **body}
+                if body.get('mode') not in tuple(CLIMATE_MODES) or body.get('fan') not in tuple(CLIMATE_FANS):
                     raise ValueError('Unsupported mode or fan')
                 temp = body.get('temperature_f')
                 if isinstance(temp, bool) or not isinstance(temp, int) or not 60 <= temp <= 86:
                     raise ValueError('Whole Fahrenheit temperature must be 60..86')
-                if not state.get('xye', {}).get('valid') or state['xye'].get('stale'):
-                    raise ValueError('Fresh XYE status required')
-                fields = {'mode': {'off':0,'fan':129,'dry':130,'heat':132,'cool':136}[body['mode']],
-                          'fan': {'auto':128,'high':1,'medium':2,'low':4}[body['fan']], 'temp':temp}
+                fields = {'mode': CLIMATE_MODES[body['mode']], 'fan': CLIMATE_FANS[body['fan']], 'temp':temp}
             else:
                 raise ValueError('Unsupported command')
             # Audit before send; if storage is broken, do not act.
@@ -312,16 +333,23 @@ def main():
     esp_token = os.getenv('ESP_TOKEN','')
     if not args.demo and len(esp_token) < 16:
         parser.error('ESP_TOKEN must contain at least 16 characters')
+    mqtt_enabled = bool(os.getenv('MQTT_HOST')) and not args.demo
     supervisor = Supervisor(os.getenv('DB_PATH', str(ROOT / 'data/hvac.sqlite')),
-        args.demo, os.getenv('CONTROL_ENABLED', 'false').lower() == 'true')
+        args.demo, os.getenv('CONTROL_ENABLED', 'false').lower() == 'true', mqtt_enabled=mqtt_enabled)
     worker = threading.Thread(target=supervisor.run, daemon=True)
     if args.demo: worker.start()
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(supervisor, token, esp_token))
+    mqtt_worker = None
+    if mqtt_enabled:
+        from mqtt_bridge import run_bridge
+        mqtt_worker = threading.Thread(target=run_bridge, args=(supervisor, climate_readback), daemon=True)
+        mqtt_worker.start()
     try:
         server.serve_forever()
     finally:
         supervisor.stop.set()
         if args.demo: worker.join(timeout=10)
+        if mqtt_worker: mqtt_worker.join(timeout=5)
         server.server_close()
 
 if __name__ == '__main__':

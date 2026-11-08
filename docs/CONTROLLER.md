@@ -99,12 +99,49 @@ Frame history deduplicates overlapping ESP ring snapshots. This is best-effort
 archival: a network outage or ring overflow can lose frames; the ESP does not have
 a durable capture spool.
 
-The application uses Python's standard library and runs without pip packages.
+The dashboard and supervisor use Python's standard library. Optional MQTT
+discovery uses Paho MQTT.
 Its built-in HTTP server is intended for this private local deployment. Use a
 trusted LAN or TLS reverse proxy because bearer tokens over plain HTTP are not
 encrypted. No token is embedded in the HTML. Successful browser sign-in saves the access key
 in sessionStorage for that tab session, allowing page reloads. Sign out clears it;
 a rejected key also clears the saved sign-in. It is not saved in localStorage.
+
+## Home Assistant MQTT discovery
+
+1. Set up Home Assistant's MQTT integration with an MQTT 5 broker, such as
+   Mosquitto. Set `MQTT_HOST` in the controller's Compose environment to the
+   same broker's hostname and set `MQTT_USERNAME` and `MQTT_PASSWORD` if needed.
+   With `MQTT_TLS=true`, the controller verifies the broker using system-trusted
+   certificates. The default ports are 1883 for plain MQTT and 8883 for TLS.
+   Set `MQTT_PORT` to override the port and `MQTT_DISCOVERY_PREFIX` if Home
+   Assistant uses a discovery prefix other than `homeassistant`.
+2. Redeploy the controller. With MQTT enabled, the standard Compose stack
+   installs the pinned MQTT client into its temporary filesystem at startup and
+   needs access to the Python package index. If installation fails, the
+   controller starts and logs the MQTT import error. Restart it after restoring
+   package-index access. A manual Python deployment can install the client first
+   with `python -m pip install -r controller/requirements-mqtt.txt`.
+3. Once the ESP reports telemetry, look for **HVAC Controller** under Home
+   Assistant's MQTT integration. It includes decoded measurements per bus input,
+   XYE error and protection flags, and a thermostat. Firmware that supports the
+   cooling ceiling also provides its enabled status, configured maximum in Hz,
+   factory requested Hz, and forwarded Hz as read-only entities.
+4. Set `CONTROL_ENABLED=true` to allow thermostat commands. Use fresh XYE polling
+   and verify each mode and fan combination you intend to use. The setpoint
+   range is 60–86 °F in whole degrees. The unit keeps its existing fan and
+   setpoint when it is off, so change those after selecting an active mode.
+   Home Assistant shows the settings reported by the unit.
+
+The broker account needs write access to discovery topics under the discovery
+prefix and to state and availability under `hvac_controller/hvac_<mac>/`,
+where `<mac>` is the ESP MAC in lowercase without separators. With controls
+enabled, it also needs read access to `hvac_controller/hvac_<mac>/set/+`.
+Restrict command publication to trusted broker clients. Send commands without
+the MQTT retain flag. MQTT starts independently of the ESP heartbeat.
+The dashboard header shows MQTT broker status separately from ESP telemetry.
+If the MQTT badge shows a connection failure, check the controller logs and
+broker settings.
 
 ## Local review and tests
 

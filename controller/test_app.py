@@ -8,7 +8,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from http.server import ThreadingHTTPServer
-from app import Supervisor, make_handler
+from types import SimpleNamespace
+from unittest.mock import patch
+from app import Supervisor, climate_readback, make_handler
+from mqtt_bridge import HomeAssistantBridge
 
 CLIMATE = {'kind':'climate','mode':'cool','fan':'auto','temperature_f':79}
 class Tests(unittest.TestCase):
@@ -67,6 +70,73 @@ class Tests(unittest.TestCase):
     def test_pending_command_blocks_second_write(self):
         self.s.register(self.payload); self.s.command(CLIMATE)
         with self.assertRaises(ValueError): self.s.command(CLIMATE)
+    def test_mqtt_discovery_and_stale_measurements(self):
+        measurement = {'value': 25, 'valid': True, 'stale': False}
+        self.payload['status']['ports'] = [
+            {'port': 0, 'telemetry': {'indoor_ambient_c': measurement}},
+            {'port': 1, 'telemetry': {'indoor_ambient_c': {**measurement, 'stale': True}}},
+        ]
+        self.payload['device']['proxy'] = {'ceiling': {
+            'supported': True, 'enabled': False, 'maximum_hz': 40,
+            'fresh': False, 'requested_hz': 50, 'forwarded_hz': 40,
+        }}
+        self.payload['xye'].update(mode=136, fan=132, setpoint_raw=79)
+        self.s.register(self.payload)
+        publications = {}
+
+        def publish(topic, payload, **kwargs):
+            publications[topic] = json.loads(payload) if topic.endswith('/config') else payload
+            return SimpleNamespace(rc=0)
+
+        bridge = HomeAssistantBridge(self.s, climate_readback, SimpleNamespace(publish=publish),
+                                     'hvac_test', 'homeassistant')
+        state = bridge.state_payload(self.s.snapshot())
+        self.assertEqual(state['odu_indoor_ambient_c'], 25)
+        self.assertNotIn('idu_indoor_ambient_c', state)
+        self.assertEqual(state['indoor_f'], 77)
+        self.assertEqual(state['fan'], 'auto')
+        self.assertEqual(state['ceiling_enabled'], 'OFF')
+        self.assertEqual(state['ceiling_maximum_hz'], 40)
+        self.assertNotIn('ceiling_forwarded_hz', state)
+        self.assertEqual(bridge.state_payload({**self.s.snapshot(), 'connected': False}), {})
+        self.assertIn('homeassistant/sensor/hvac_test/idu_indoor_ambient_c/config', publications)
+        ceiling = publications['homeassistant/sensor/hvac_test/ceiling_maximum_hz/config']
+        climate = publications['homeassistant/climate/hvac_test/thermostat/config']
+        self.assertEqual(ceiling['unit_of_measurement'], 'Hz')
+        self.assertNotIn('command_topic', ceiling)
+        self.assertEqual(ceiling['device'], climate['device'])
+        self.assertIn('temperature_command_topic', climate)
+        self.s.control = False
+        bridge.discovered.clear()
+        bridge.climate()
+        self.assertNotIn('temperature_command_topic', publications['homeassistant/climate/hvac_test/thermostat/config'])
+
+    def test_mqtt_commands_merge_with_fresh_readback_and_ignore_retained_writes(self):
+        self.payload['xye'].update(mode=136, fan=132, setpoint_raw=79)
+        self.s.register(self.payload)
+        client = SimpleNamespace(is_connected=lambda: True,
+                                 publish=lambda *args, **kwargs: SimpleNamespace(rc=0))
+        bridge = HomeAssistantBridge(self.s, climate_readback, client, 'hvac_test', 'homeassistant')
+
+        def send(field, payload, retain=False):
+            message = SimpleNamespace(topic=f'{bridge.base}/set/{field}', payload=payload, retain=retain)
+            bridge.on_message(client, None, message)
+
+        with patch('mqtt_bridge.monotonic', return_value=1) as now:
+            send('mode', b'fan_only')
+            send('temperature', b'80.0')
+            send('fan_mode', b'high', retain=True)
+            bridge.publish()
+            self.assertIsNone(self.s.pending)
+            now.return_value = 2
+            bridge.publish()
+        command = self.s.register(self.payload)
+        self.assertEqual((command['mode'], command['fan'], command['temp']), (129, 128, 80))
+        self.assertIsNone(self.s.register(self.payload))
+        self.payload['xye']['stale'] = True
+        self.s.register(self.payload)
+        with self.assertRaisesRegex(ValueError, 'Fresh XYE'):
+            self.s.command({'kind': 'climate', 'temperature_f': 81}, partial_climate=True)
     def test_ceiling_requires_support_lease_armed_and_valid_range(self):
         body={'kind':'demand_ceiling','enabled':True,'maximum_hz':20}
         self.s.register(self.payload)

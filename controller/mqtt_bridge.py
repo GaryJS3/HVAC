@@ -24,6 +24,19 @@ MEASUREMENT_NAMES = {
     'target_hz': 'Target compressor frequency',
     'power_w': 'Protocol power (provisional)',
 }
+# The installed bridge receives indoor and outdoor frames on separate inputs.
+UNUSED_SENSOR_FIELDS = {
+    'odu': {
+        'indoor_mode', 'indoor_setpoint_c', 'indoor_demand_hz',
+        'indoor_fan_mode', 'indoor_ambient_c', 'indoor_coil_c',
+    },
+    'idu': {
+        'actual_hz', 'outdoor_coil_c', 'outdoor_ambient_c', 'discharge_c',
+        'current_a', 'outdoor_mode', 'fan_rpm', 'exv_steps', 'dc_bus_v',
+        'fan_target_rpm', 'exv_target_steps', 'session_minutes', 'lifetime_hours',
+        'pid_step', 'fan_gear', 'compressor_state', 'power_w', 'target_hz',
+    },
+}
 UNITS = {
     '_c': ('°C', 'temperature'),
     '_hz': ('Hz', 'frequency'),
@@ -67,12 +80,12 @@ class HomeAssistantBridge:
         if key in self.discovered:
             return
         topic = f'{self.discovery_prefix}/{platform}/{self.identity}/{key}/config'
-        payload = {
+        payload = '' if config is None else json.dumps({
             'unique_id': f'{self.identity}_{key}', 'name': name,
             'device': {'identifiers': [self.identity], 'name': 'HVAC Controller'},
             **config,
-        }
-        if self.client.publish(topic, json.dumps(payload), qos=1, retain=True).rc == 0:
+        })
+        if self.client.publish(topic, payload, qos=1, retain=True).rc == 0:
             self.discovered.add(key)
 
     def availability_config(self, template):
@@ -124,11 +137,17 @@ class HomeAssistantBridge:
         state = {}
         connected = snapshot.get('connected')
         indoor = None
+        # Clear the retained discovery entries created by earlier controller versions.
+        for side, fields in UNUSED_SENSOR_FIELDS.items():
+            for field in fields:
+                self.publish_config('sensor', f'{side}_{field}', None, None)
         for port in snapshot.get('status', {}).get('ports', []):
             side = {0: 'odu', 1: 'idu'}.get(port.get('port'))
             if side is None:
                 continue
             for field, measurement in port.get('telemetry', {}).items():
+                if field in UNUSED_SENSOR_FIELDS[side]:
+                    continue
                 if not re.fullmatch(r'[a-z0-9_]+', field) or not isinstance(measurement, dict):
                     continue
                 key = f'{side}_{field}'

@@ -74,7 +74,10 @@ class Tests(unittest.TestCase):
         measurement = {'value': 25, 'valid': True, 'stale': False}
         self.payload['status']['ports'] = [
             {'port': 0, 'telemetry': {'indoor_ambient_c': measurement}},
-            {'port': 1, 'telemetry': {'indoor_ambient_c': {**measurement, 'stale': True}}},
+            {'port': 1, 'telemetry': {
+                'indoor_ambient_c': measurement,
+                'indoor_coil_c': {**measurement, 'stale': True},
+            }},
         ]
         self.payload['device']['proxy'] = {'ceiling': {
             'supported': True, 'enabled': False, 'maximum_hz': 40,
@@ -85,14 +88,17 @@ class Tests(unittest.TestCase):
         publications = {}
 
         def publish(topic, payload, **kwargs):
-            publications[topic] = json.loads(payload) if topic.endswith('/config') else payload
+            if payload == '':
+                self.assertEqual(kwargs, {'qos': 1, 'retain': True})
+            publications[topic] = json.loads(payload) if topic.endswith('/config') and payload else payload
             return SimpleNamespace(rc=0)
 
         bridge = HomeAssistantBridge(self.s, climate_readback, SimpleNamespace(publish=publish),
                                      'hvac_test', 'homeassistant')
         state = bridge.state_payload(self.s.snapshot())
-        self.assertEqual(state['odu_indoor_ambient_c'], 25)
-        self.assertNotIn('idu_indoor_ambient_c', state)
+        self.assertEqual(state['idu_indoor_ambient_c'], 25)
+        self.assertNotIn('odu_indoor_ambient_c', state)
+        self.assertNotIn('idu_indoor_coil_c', state)
         self.assertEqual(state['indoor_f'], 77)
         self.assertEqual(state['fan'], 'auto')
         self.assertEqual(state['ceiling_enabled'], 'OFF')
@@ -100,6 +106,10 @@ class Tests(unittest.TestCase):
         self.assertNotIn('ceiling_forwarded_hz', state)
         self.assertEqual(bridge.state_payload({**self.s.snapshot(), 'connected': False}), {})
         self.assertIn('homeassistant/sensor/hvac_test/idu_indoor_ambient_c/config', publications)
+        self.assertTrue(publications['homeassistant/sensor/hvac_test/idu_indoor_coil_c/config'])
+        self.assertEqual(publications['homeassistant/sensor/hvac_test/odu_indoor_ambient_c/config'], '')
+        self.assertEqual(publications['homeassistant/sensor/hvac_test/idu_actual_hz/config'], '')
+        self.assertEqual(sum(payload == '' for payload in publications.values()), 24)
         ceiling = publications['homeassistant/sensor/hvac_test/ceiling_maximum_hz/config']
         climate = publications['homeassistant/climate/hvac_test/thermostat/config']
         self.assertEqual(ceiling['unit_of_measurement'], 'Hz')

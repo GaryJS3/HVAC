@@ -18,6 +18,11 @@ CEILING_FIELDS = {
     'ceiling_requested_hz': ('requested_hz', 'Factory requested demand'),
     'ceiling_forwarded_hz': ('forwarded_hz', 'Forwarded demand'),
 }
+CEILING_CONTROLS = {
+    'ceiling_maximum_hz': ('number', 'sensor', {'min': 20, 'max': 120, 'step': 1,
+                                             'unit_of_measurement': 'Hz', 'mode': 'box'}),
+    'ceiling_enabled': ('switch', 'binary_sensor', {}),
+}
 MEASUREMENT_NAMES = {
     'indoor_demand_hz': 'Indoor requested demand',
     'actual_hz': 'Actual compressor frequency',
@@ -77,7 +82,8 @@ class HomeAssistantBridge:
         self.next_state_at = 0
 
     def publish_config(self, platform, key, name, config):
-        if key in self.discovered:
+        entry = (platform, key)
+        if entry in self.discovered:
             return
         topic = f'{self.discovery_prefix}/{platform}/{self.identity}/{key}/config'
         payload = '' if config is None else json.dumps({
@@ -86,7 +92,7 @@ class HomeAssistantBridge:
             **config,
         })
         if self.client.publish(topic, payload, qos=1, retain=True).rc == 0:
-            self.discovered.add(key)
+            self.discovered.add(entry)
 
     def availability_config(self, template):
         return {
@@ -97,12 +103,15 @@ class HomeAssistantBridge:
             ],
         }
 
-    def sensor(self, key, name, *, binary=False):
-        config = {
+    def state_config(self, key):
+        return {
             'state_topic': self.state_topic,
             'value_template': "{{ value_json.get('" + key + "') }}",
             **self.availability_config(availability(key)),
         }
+
+    def sensor(self, key, name, *, binary=False):
+        config = self.state_config(key)
         if binary:
             self.publish_config('binary_sensor', key, name, config)
             return
@@ -114,6 +123,23 @@ class HomeAssistantBridge:
                 config['state_class'] = 'total_increasing' if device_class == 'duration' else 'measurement'
                 break
         self.publish_config('sensor', key, name, config)
+
+    def ceiling_entity(self, key, name):
+        platform, read_only_platform, options = CEILING_CONTROLS[key]
+        if not self.supervisor.control:
+            self.publish_config(platform, key, None, None)
+            self.sensor(key, name, binary=read_only_platform == 'binary_sensor')
+            return
+        self.publish_config(read_only_platform, key, None, None)
+        config = self.state_config(key)
+        if platform == 'number':
+            config.update(self.availability_config(
+                "{{ 'online' if value_json.get('ceiling_enabled') == 'ON' "
+                "and value_json.get('ceiling_maximum_hz') is not none else 'offline' }}"))
+        self.publish_config(platform, key, name, {
+            **config, **options, 'command_topic': f'{self.base}/set/{key}',
+            'optimistic': False, 'retain': False,
+        })
 
     def climate(self):
         config = {
@@ -165,11 +191,14 @@ class HomeAssistantBridge:
 
         ceiling = snapshot.get('device', {}).get('proxy', {}).get('ceiling', {})
         if ceiling.get('supported'):
-            self.sensor('ceiling_enabled', 'Cooling demand ceiling enabled', binary=True)
+            self.ceiling_entity('ceiling_enabled', 'Cooling demand ceiling enabled')
             if connected and type(ceiling.get('enabled')) is bool:
                 state['ceiling_enabled'] = 'ON' if ceiling['enabled'] else 'OFF'
             for key, (field, name) in CEILING_FIELDS.items():
-                self.sensor(key, name)
+                if key in CEILING_CONTROLS:
+                    self.ceiling_entity(key, name)
+                else:
+                    self.sensor(key, name)
                 value = ceiling.get(field)
                 if connected and number(value) and (field == 'maximum_hz' or ceiling.get('fresh')):
                     state[key] = value
@@ -196,7 +225,12 @@ class HomeAssistantBridge:
         if message.retain or not self.supervisor.control:
             return
         field = message.topic.removeprefix(f'{self.base}/set/')
-        if field not in CLIMATE_FIELDS or message.topic != f'{self.base}/set/{field}':
+        if message.topic != f'{self.base}/set/{field}':
+            return
+        if field in CEILING_CONTROLS:
+            self.set_ceiling(field, message.payload)
+            return
+        if field not in CLIMATE_FIELDS:
             return
         try:
             value = message.payload.decode('ascii')
@@ -220,6 +254,20 @@ class HomeAssistantBridge:
             self.commands[CLIMATE_FIELDS[field]] = value
             # Home Assistant can send mode and setpoint in separate messages for one action.
             self.command_ready_at = monotonic() + 0.2
+
+    def set_ceiling(self, field, payload):
+        try:
+            if field == 'ceiling_enabled':
+                if payload not in (b'ON', b'OFF'):
+                    raise ValueError('Expected ON or OFF')
+                settings = {'enabled': payload == b'ON'}
+            else:
+                if not re.fullmatch(rb'[0-9]{2,3}(?:\.0+)?', payload):
+                    raise ValueError('Cooling ceiling must be a whole frequency in Hz')
+                settings = {'maximum_hz': int(payload.split(b'.')[0])}
+            self.supervisor.command({'kind': 'demand_ceiling', **settings}, partial_ceiling=True)
+        except (ValueError, sqlite3.Error) as exc:
+            LOG.warning('MQTT cooling ceiling command rejected: %s', exc)
 
     def take_commands(self, *, discard=False):
         with self.lock:

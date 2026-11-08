@@ -165,7 +165,7 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
             self.poll()
             self.stop.wait(2)
 
-    def command(self, body, *, partial_climate=False):
+    def command(self, body, *, partial_climate=False, partial_ceiling=False):
         if not self.control:
             raise ValueError('Control is disabled for this deployment')
         with self.command_lock:
@@ -196,12 +196,20 @@ CREATE INDEX IF NOT EXISTS frames_ts ON frames(ts);''')
                     fields = {'source':source}
             elif kind == 'demand_ceiling':
                 proxy = state['device'].get('proxy', {})
-                if not proxy.get('ceiling', {}).get('supported'):
+                ceiling = proxy.get('ceiling', {})
+                if not ceiling.get('supported'):
                     raise ValueError('Demand-ceiling firmware required')
                 enabled = body.get('enabled')
+                maximum = body.get('maximum_hz', 20)
+                if partial_ceiling:
+                    if 'enabled' not in body:
+                        if ceiling.get('enabled') is not True:
+                            raise ValueError('Enable the cooling demand ceiling before changing its frequency')
+                        enabled = True
+                    elif enabled:
+                        maximum = ceiling.get('maximum_hz')
                 if type(enabled) is not bool:
                     raise ValueError('enabled must be boolean')
-                maximum = body.get('maximum_hz', 20)
                 if enabled and (type(maximum) is not int or not 20 <= maximum <= 120):
                     raise ValueError('Cooling ceiling must be a whole 20..120 Hz')
                 if enabled and (not proxy.get('armed') or not state['device'].get('lease_active')):

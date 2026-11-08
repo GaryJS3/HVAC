@@ -109,17 +109,56 @@ class Tests(unittest.TestCase):
         self.assertTrue(publications['homeassistant/sensor/hvac_test/idu_indoor_coil_c/config'])
         self.assertEqual(publications['homeassistant/sensor/hvac_test/odu_indoor_ambient_c/config'], '')
         self.assertEqual(publications['homeassistant/sensor/hvac_test/idu_actual_hz/config'], '')
-        self.assertEqual(sum(payload == '' for payload in publications.values()), 24)
-        ceiling = publications['homeassistant/sensor/hvac_test/ceiling_maximum_hz/config']
+        self.assertEqual(sum(payload == '' for payload in publications.values()), 26)
+        ceiling = publications['homeassistant/number/hvac_test/ceiling_maximum_hz/config']
+        switch = publications['homeassistant/switch/hvac_test/ceiling_enabled/config']
         climate = publications['homeassistant/climate/hvac_test/thermostat/config']
         self.assertEqual(ceiling['unit_of_measurement'], 'Hz')
-        self.assertNotIn('command_topic', ceiling)
+        self.assertEqual((ceiling['min'], ceiling['max'], ceiling['step']), (20, 120, 1))
+        self.assertEqual(ceiling['command_topic'], f'{bridge.base}/set/ceiling_maximum_hz')
+        self.assertEqual(switch['command_topic'], f'{bridge.base}/set/ceiling_enabled')
+        self.assertEqual(publications['homeassistant/sensor/hvac_test/ceiling_maximum_hz/config'], '')
         self.assertEqual(ceiling['device'], climate['device'])
         self.assertIn('temperature_command_topic', climate)
         self.s.control = False
         bridge.discovered.clear()
         bridge.climate()
+        bridge.ceiling_entity('ceiling_maximum_hz', 'Cooling demand ceiling')
+        self.assertEqual(publications['homeassistant/number/hvac_test/ceiling_maximum_hz/config'], '')
+        self.assertNotIn('command_topic', publications['homeassistant/sensor/hvac_test/ceiling_maximum_hz/config'])
         self.assertNotIn('temperature_command_topic', publications['homeassistant/climate/hvac_test/thermostat/config'])
+
+    def test_mqtt_ceiling_commands_use_esp_state_and_validation(self):
+        ceiling = {'supported': True, 'enabled': False, 'maximum_hz': 40}
+        self.payload['device']['proxy'] = {'armed': True, 'ceiling': ceiling}
+        self.s.register(self.payload)
+        bridge = HomeAssistantBridge(self.s, climate_readback, None, 'hvac_test', 'homeassistant')
+
+        def send(key, payload, retain=False):
+            bridge.on_message(None, None, SimpleNamespace(
+                topic=f'{bridge.base}/set/ceiling_{key}', payload=payload, retain=retain))
+
+        send('enabled', b'ON', retain=True)
+        self.assertIsNone(self.s.register(self.payload))
+        with self.assertLogs('mqtt_bridge', level='WARNING'):
+            send('maximum_hz', b'55')
+        self.assertIsNone(self.s.register(self.payload))
+        send('enabled', b'ON')
+        command = self.s.register(self.payload)
+        self.assertEqual((command['kind'], command['enabled'], command['maximum_hz']), ('demand_ceiling', 1, 40))
+        ceiling['enabled'] = True
+        self.s.register(self.payload)
+        with self.assertLogs('mqtt_bridge', level='WARNING'):
+            send('maximum_hz', b'121')
+            send('maximum_hz', b'40.5')
+        self.assertIsNone(self.s.register(self.payload))
+        send('maximum_hz', b'55.0')
+        command = self.s.register(self.payload)
+        self.assertEqual((command['enabled'], command['maximum_hz']), (1, 55))
+        send('enabled', b'OFF')
+        command = self.s.register(self.payload)
+        self.assertEqual(command['enabled'], 0)
+        self.assertNotIn('maximum_hz', command)
 
     def test_mqtt_commands_merge_with_fresh_readback_and_ignore_retained_writes(self):
         self.payload['xye'].update(mode=136, fan=132, setpoint_raw=79)

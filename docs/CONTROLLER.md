@@ -126,8 +126,11 @@ a rejected key also clears the saved sign-in. It is not saved in localStorage.
    Assistant's MQTT integration. It includes decoded measurements per bus input,
    XYE error and protection flags, and a thermostat. Firmware that supports the
    cooling ceiling also provides its enabled status, configured maximum in Hz,
-   factory requested Hz, and forwarded Hz as read-only entities.
-4. Set `CONTROL_ENABLED=true` to allow thermostat commands. Use fresh XYE polling
+   factory requested Hz, and forwarded Hz.
+4. Set `CONTROL_ENABLED=true` to allow thermostat and cooling ceiling commands.
+   The ceiling switch enables the ESP's current maximum. Turn it on before
+   changing the maximum in whole Hz from 20 to 120. Home Assistant displays the
+   ESP's reported settings. Use fresh XYE polling
    and verify each mode and fan combination you intend to use. The setpoint
    range is 60–86 °F in whole degrees. The unit keeps its existing fan and
    setpoint when it is off, so change those after selecting an active mode.
